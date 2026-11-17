@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rollcraft.invalid/schemas/preset.schema.json",
+  "title": "Rollcraft Preset",
+  "description": "One preset = one roll. Used as manifest.json inside .rcpreset and as presets/<id>.json inside .rcbank. The trigger list is never stored; it is generated at playback.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "engineVersion", "name", "rollType", "intensity", "blend",
+    "velocityCurve", "sampleA", "sampleB", "playback", "variation", "humanize"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "engineVersion": {
+      "description": "Engine version that defined the derivation from seeds (semantic version).",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+
+    "rollType": {
+      "description": "null = no roll (default / after Clear): the instrument is silent.",
+      "enum": ["build", "drop", "rush", "burst", "wave", null]
+    },
+    "intensity": { "description": "Percent.", "type": "number", "minimum": 0, "maximum": 100, "default": 50 },
+    "blend": { "description": "Percent. 50 = original DNA.", "type": "number", "minimum": 0, "maximum": 100, "default": 50 },
+
+    "gesture": {
+      "description": "Optional original gesture, normalized to 0..1 in both axes, in drawing order.",
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["x", "y"],
+        "properties": {
+          "x": { "type": "number", "minimum": 0, "maximum": 1 },
+          "y": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+
+    "velocityCurve": { "$ref": "velocity-curve.schema.json" },
+
+    "sampleA": { "$ref": "#/$defs/sampleSlot" },
+    "sampleB": { "$ref": "#/$defs/sampleSlot" },
+
+    "playback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "windowBars", "quantize", "humanize", "swing", "velocityFollow"],
+      "properties": {
+        "mode": { "enum": ["trigger", "hold"], "default": "trigger" },
+        "windowBars": { "description": "Playback window in bars (max 4 in v1).", "enum": [4, 2, 1, 0.5], "default": 4 },
+        "quantize": { "enum": ["off", "1/16", "1/8", "1/4", "1bar"], "default": "off" },
+        "humanize": { "description": "Percent.", "type": "number", "minimum": 0, "maximum": 100, "default": 0 },
+        "swing": { "description": "Percent.", "type": "number", "minimum": 0, "maximum": 100, "default": 0 },
+        "velocityFollow": { "enum": ["off", "velocity", "velocity_intensity"], "default": "velocity_intensity" }
+      }
+    },
+
+    "variation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed"],
+      "properties": {
+        "seed": { "description": "0 = no variation.", "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "humanize": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed"],
+      "properties": {
+        "seed": { "description": "Assigned once at preset creation; Save As keeps it.", "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+
+    "metadata": {
+      "description": "Reserved for future use (preview, NKS). Unknown content must be preserved, not interpreted, in v1.",
+      "type": "object"
+    }
+  },
+
+  "$defs": {
+    "sampleSlot": {
+      "description": "null = no sample loaded.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "sha256", "file", "tuneSemitones", "start", "end", "levelDb"],
+          "properties": {
+            "name": { "description": "Original display name.", "type": "string", "minLength": 1 },
+            "sha256": { "description": "SHA-256 of the stored file content, lowercase hex.", "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "file": {
+              "description": "Path inside the archive: samples/<name> in .rcpreset, samples/<sha256>.<ext> in .rcbank. Stored as WAV or FLAC.",
+              "type": "string",
+              "pattern": "^samples/[^/\\\\]+\\.(wav|flac)$"
+            },
+            "tuneSemitones": { "type": "number", "minimum": -24, "maximum": 24, "default": 0 },
+            "start": { "description": "Fraction of sample length, 0..1.", "type": "number", "minimum": 0, "maximum": 1, "default": 0 },
+            "end": { "description": "Fraction of sample length, 0..1; must be greater than start.", "type": "number", "minimum": 0, "maximum": 1, "default": 1 },
+            "levelDb": { "type": "number", "minimum": -60, "maximum": 6, "default": 0 }
+          }
+        }
+      ]
+    }
+  }
+}

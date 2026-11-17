@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rollcraft.invalid/schemas/velocity-curve.schema.json",
+  "title": "Rollcraft Velocity Curve",
+  "description": "Velocity shape over the roll. Positions are normalized over the 4-bar reference (0 = start, 1 = end); values are MIDI velocity units. Values between points are linearly interpolated.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "points"],
+  "properties": {
+    "type": {
+      "description": "Curve type. Variate never changes it.",
+      "enum": ["flat", "crescendo", "decrescendo", "spike", "inverted_spike", "wave", "ghost"]
+    },
+    "points": {
+      "description": "Editable control points. Variate may move each point's velocity by +/-10.",
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["t", "v"],
+        "properties": {
+          "t": { "type": "number", "minimum": 0, "maximum": 1 },
+          "v": { "type": "integer", "minimum": 1, "maximum": 127 }
+        }
+      }
+    }
+  }
+}

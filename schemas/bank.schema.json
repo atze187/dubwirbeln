@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rollcraft.invalid/schemas/bank.schema.json",
+  "title": "Rollcraft Bank",
+  "description": "manifest.json of a .rcbank. Presets live in presets/<id>.json (see preset.schema.json); samples live in a shared pool samples/<sha256>.<ext>, referenced from presets by hash.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "presets"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "author": { "type": "string", "maxLength": 128 },
+    "description": { "type": "string", "maxLength": 2000 },
+    "presets": {
+      "description": "Ordered list of presets. The browser shows them as a tree; folder is a slash-separated path.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "file"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "folder": { "type": "string", "maxLength": 256 },
+          "file": { "type": "string", "pattern": "^presets/[a-z0-9][a-z0-9_-]{0,63}\\.json$" }
+        }
+      }
+    },
+    "metadata": {
+      "description": "Reserved for future use (previews, NKS). Preserve, do not interpret, in v1.",
+      "type": "object"
+    }
+  }
+}
