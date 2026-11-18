@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the example files against the Rollcraft JSON schemas.
+"""Validate the example files against the dubwirbeln JSON schemas.
 
 Files in schemas/examples/valid must validate, files in schemas/examples/invalid
 must be rejected. The schema is chosen from the file name prefix

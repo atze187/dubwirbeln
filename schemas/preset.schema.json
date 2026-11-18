@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rollcraft.invalid/schemas/preset.schema.json",
-  "title": "Rollcraft Preset",
-  "description": "One preset = one roll. Used as manifest.json inside .rcpreset and as presets/<id>.json inside .rcbank. The trigger list is never stored; it is generated at playback.",
+  "$id": "https://dubwirbeln.invalid/schemas/preset.schema.json",
+  "title": "dubwirbeln Preset",
+  "description": "One preset = one roll. Used as manifest.json inside .dwpreset and as presets/<id>.json inside .dwbank. The trigger list is never stored; it is generated at playback.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -96,7 +96,7 @@
             "name": { "description": "Original display name.", "type": "string", "minLength": 1 },
             "sha256": { "description": "SHA-256 of the stored file content, lowercase hex.", "type": "string", "pattern": "^[0-9a-f]{64}$" },
             "file": {
-              "description": "Path inside the archive: samples/<name> in .rcpreset, samples/<sha256>.<ext> in .rcbank. Stored as WAV or FLAC.",
+              "description": "Path inside the archive: samples/<name> in .dwpreset, samples/<sha256>.<ext> in .dwbank. Stored as WAV or FLAC.",
               "type": "string",
               "pattern": "^samples/[^/\\\\]+\\.(wav|flac)$"
             },

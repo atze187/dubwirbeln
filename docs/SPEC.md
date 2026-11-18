@@ -1,4 +1,4 @@
-# ROLLCRAFT CORE v1.0 - Master Specification
+# dubwirbeln CORE v1.0 - Master Specification
 
 **Status:** Frozen (v1.0 architecture)
 **Motto:** LOAD. PAINT. TRIGGER.
@@ -13,7 +13,7 @@ Conventions:
 
 ## Part 1 - Product Vision
 
-ROLLCRAFT CORE is a monophonic drum-roll instrument.
+dubwirbeln CORE is a monophonic drum-roll instrument.
 
 It is **not**: a sampler workstation, a step sequencer, a break manipulator, a MIDI roll editor.
 
@@ -91,7 +91,7 @@ Parameters: Roll Type, Intensity, Blend.
 
 ### Determinism (DECIDED)
 
-ROLLCRAFT CORE is deterministic. The same preset produces the same triggers, velocities and sample distribution.
+dubwirbeln CORE is deterministic. The same preset produces the same triggers, velocities and sample distribution.
 
 Exceptions:
 - None for Humanize: it is seeded (`humanize.seed`, Part 7), so it is reproducible as well.
@@ -271,7 +271,7 @@ Note: at high tempi 1/64 steps (about 19 ms at 200 BPM) overlap noticeably with 
 - A "Trigger Note" field has a Learn button. On click the status bar shows "MIDI Learn: play a note". The next incoming Note-On becomes the trigger note and Learn mode ends. Clicking the button again or pressing Esc cancels. The note can also be typed into the field.
 - Only Note-On triggers. All other notes are ignored. MIDI channel: omni (any channel).
 - Default trigger note: **C1 (MIDI note 36)**.
-- Storage: **plugin state of the instance** (saved with the DAW project). It is **not** part of `.rcpreset` or `.rcbank`, so switching presets or banks never changes the trigger note.
+- Storage: **plugin state of the instance** (saved with the DAW project). It is **not** part of `.dwpreset` or `.dwbank`, so switching presets or banks never changes the trigger note.
 - v1 scope: trigger note only. CC learn for Intensity, Blend and other parameters is a future topic; until then use host automation.
 
 ## Part 10 - Variate and Undo
@@ -321,7 +321,7 @@ Assumptions (confirm or change):
 
 ## Part 11 - Preset System
 
-Extension: `.rcpreset`. Embedded samples: yes. Dirty state supported. Save = overwrite, Save As = new preset.
+Extension: `.dwpreset`. Embedded samples: yes. Dirty state supported. Save = overwrite, Save As = new preset.
 
 Preset stores (DECIDED):
 - Roll Type, Intensity, Blend
@@ -354,9 +354,9 @@ Used for a new preset and as the reset values for Clear:
 
 ### Container format (DECIDED, closes TODO-005)
 
-`.rcpreset` and `.rcbank` are both **ZIP archives** with a `manifest.json` in the archive root. `manifest.json` carries `schemaVersion` and the preset or bank description.
+`.dwpreset` and `.dwbank` are both **ZIP archives** with a `manifest.json` in the archive root. `manifest.json` carries `schemaVersion` and the preset or bank description.
 
-`.rcpreset` layout:
+`.dwpreset` layout:
 ```
 manifest.json          preset description
 samples/               Sample A and B as WAV or FLAC
@@ -367,18 +367,18 @@ Compression: samples are stored without additional compression (WAV/FLAC in stor
 
 ## Part 12 - Bank System
 
-Extension: `.rcbank`. ZIP archive (see Part 11 for the shared container rules). Contains presets, samples, previews (reserved), metadata.
+Extension: `.dwbank`. ZIP archive (see Part 11 for the shared container rules). Contains presets, samples, previews (reserved), metadata.
 
 Layout (DECIDED):
 ```
 manifest.json          bank metadata and list of presets
-presets/*.json         one JSON entry per preset (not nested .rcpreset files)
+presets/*.json         one JSON entry per preset (not nested .dwpreset files)
 samples/<sha256>.wav   shared sample pool, named by content hash (or .flac)
 preview/               reserved (future)
 ```
 
 - Samples are **deduplicated by SHA-256** of their content. Presets reference samples by hash, so a sample used by several presets is stored once.
-- Presets inside a bank are JSON entries. Exporting a preset from a bank produces a standalone `.rcpreset` including its samples.
+- Presets inside a bank are JSON entries. Exporting a preset from a bank produces a standalone `.dwpreset` including its samples.
 
 ## Part 13 - JSON Schemas
 

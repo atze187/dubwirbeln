@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rollcraft.invalid/schemas/velocity-curve.schema.json",
-  "title": "Rollcraft Velocity Curve",
+  "$id": "https://dubwirbeln.invalid/schemas/velocity-curve.schema.json",
+  "title": "dubwirbeln Velocity Curve",
   "description": "Velocity shape over the roll. Positions are normalized over the 4-bar reference (0 = start, 1 = end); values are MIDI velocity units. Values between points are linearly interpolated.",
   "type": "object",
   "additionalProperties": false,

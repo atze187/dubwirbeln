@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rollcraft.invalid/schemas/bank.schema.json",
-  "title": "Rollcraft Bank",
-  "description": "manifest.json of a .rcbank. Presets live in presets/<id>.json (see preset.schema.json); samples live in a shared pool samples/<sha256>.<ext>, referenced from presets by hash.",
+  "$id": "https://dubwirbeln.invalid/schemas/bank.schema.json",
+  "title": "dubwirbeln Bank",
+  "description": "manifest.json of a .dwbank. Presets live in presets/<id>.json (see preset.schema.json); samples live in a shared pool samples/<sha256>.<ext>, referenced from presets by hash.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "name", "presets"],
