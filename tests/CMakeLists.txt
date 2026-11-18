@@ -1,0 +1,4 @@
+add_executable(dw_tests test_Smoke.cpp)
+target_link_libraries(dw_tests PRIVATE dw_engine Catch2::Catch2WithMain)
+include(Catch)
+catch_discover_tests(dw_tests)
