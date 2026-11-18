@@ -1,0 +1,1 @@
+{"schemaVersion":1,"engineVersion":"1.0.0","name":"Test","rollType":"flutter","intensity":50,"blend":50,"velocityCurve":{"type":"flat","points":[{"t":0,"v":100},{"t":1,"v":100}]},"sampleA":null,"sampleB":null,"playback":{"mode":"trigger","windowBars":4,"quantize":"off","humanize":0,"swing":0,"velocityFollow":"velocity_intensity"},"variation":{"seed":0},"humanize":{"seed":12345}}

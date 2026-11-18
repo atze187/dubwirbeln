@@ -1,6 +1,6 @@
 # ROLLCRAFT CORE v1.0 - Master Specification
 
-**Status:** Frozen (v1.0 architecture; schemas not yet validated with a tool, see Part 13)
+**Status:** Frozen (v1.0 architecture)
 **Motto:** LOAD. PAINT. TRIGGER.
 **License:** AGPLv3 (required by JUCE's free license; open source, no PRO tier)
 
@@ -382,7 +382,7 @@ preview/               reserved (future)
 
 ## Part 13 - JSON Schemas
 
-Written as JSON Schema (draft 2020-12) in `schemas/`: `velocity-curve.schema.json`, `preset.schema.json`, `bank.schema.json`. They are syntax-checked only and not yet validated against example files with a validator (no Python/Node on the dev machine at the time of writing).
+Written as JSON Schema (draft 2020-12) in `schemas/`: `velocity-curve.schema.json`, `preset.schema.json`, `bank.schema.json`. They are validated against example files in `schemas/examples/valid` (must pass) and `schemas/examples/invalid` (must be rejected) with `python tools/validate_schemas.py` (needs `jsonschema >= 4.18`).
 
 Values fixed by the schemas (DECIDED):
 - Velocity curve: 2-16 points `{t, v}` with `t` in 0..1 over the 4-bar reference, `v` as MIDI velocity 1..127, linear interpolation.
@@ -425,4 +425,4 @@ All OPEN items are closed and the spec is frozen. The assumptions below were acc
 - Part 6: Blend priority order `P`; WAVE single DNA row `A A B B`; BURST and WAVE trim the early portion (BURST uses `min(window, share * 4 bars)` instead).
 - Part 10: Clear keeps velocity curve and playback settings, confirms only when dirty.
 
-Remaining work before implementation: validate the schemas against example files with a real validator.
+The schemas are validated against example files (Part 13). Next: project skeleton (JUCE, VST3 validation per project rules).
