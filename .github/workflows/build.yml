@@ -1,7 +1,9 @@
 name: Build
 
 on:
+  # Branches are built through their pull request, so a push to a PR branch does not run twice.
   push:
+    branches: [main]
   pull_request:
 
 jobs:
