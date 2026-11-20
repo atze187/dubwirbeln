@@ -268,3 +268,105 @@ TEST_CASE("a slot without sample data is not saved", "[processor][file]") {
     target.deleteFile();
     CHECK(b.savePreset(target).wasOk());
 }
+
+// ---- Variate, Undo, Clear (spec Part 10) ----
+
+TEST_CASE("variate changes the roll values and undo and redo walk the last pass", "[processor][variate]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    setChoice(p, "rollType", 1);  // Build
+    const auto before = p.currentPreset();
+    CHECK_FALSE(p.canUndoVariate());
+
+    REQUIRE(p.variate());
+    const auto varied = p.currentPreset();
+    CHECK(varied.variationSeed != 0u);
+    CHECK((varied.intensity != before.intensity || varied.blend != before.blend));
+    CHECK(*varied.rollType == RollType::Build);
+    CHECK(varied.mode == before.mode);
+    CHECK(p.canUndoVariate());
+    CHECK_FALSE(p.canRedoVariate());
+
+    REQUIRE(p.undoVariate());
+    const auto undone = p.currentPreset();
+    CHECK(undone.intensity == before.intensity);
+    CHECK(undone.blend == before.blend);
+    CHECK(undone.variationSeed == 0u);
+    CHECK(p.canRedoVariate());
+    CHECK_FALSE(p.undoVariate());
+
+    REQUIRE(p.redoVariate());
+    const auto redone = p.currentPreset();
+    CHECK(redone.intensity == varied.intensity);
+    CHECK(redone.blend == varied.blend);
+    CHECK(redone.variationSeed == varied.variationSeed);
+}
+
+TEST_CASE("variate does nothing without a roll", "[processor][variate]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    CHECK_FALSE(p.variate());
+    CHECK_FALSE(p.canUndoVariate());
+}
+
+TEST_CASE("the variation is part of the saved state", "[processor][variate]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor a;
+    setChoice(a, "rollType", 2);  // Drop
+    REQUIRE(a.variate());
+    const auto expected = a.currentPreset();
+    const auto state = stateOf(a);
+
+    DubwirbelnProcessor b;
+    b.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    const auto restored = b.currentPreset();
+    CHECK(restored.variationSeed == expected.variationSeed);
+    CHECK(restored.intensity == expected.intensity);
+    CHECK(restored.blend == expected.blend);
+    CHECK_FALSE(b.canUndoVariate());  // the undo state is not saved
+}
+
+TEST_CASE("clear empties the roll and keeps the samples", "[processor][variate]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    REQUIRE(p.loadSample(Sample::A, wavFile("tone.wav")));
+    setChoice(p, "rollType", 1);
+    setChoice(p, "mode", 1);
+    REQUIRE(p.variate());
+    REQUIRE(p.canUndoVariate());
+    const auto seed = p.currentPreset().humanizeSeed;
+
+    p.clearRoll();
+    const auto cleared = p.currentPreset();
+    CHECK_FALSE(cleared.rollType.has_value());
+    CHECK(cleared.intensity == 50.0);
+    CHECK(cleared.blend == 50.0);
+    CHECK(cleared.variationSeed == 0u);
+    CHECK(cleared.mode == PlaybackMode::Hold);
+    CHECK(cleared.humanizeSeed == seed);
+    CHECK(cleared.sampleA.has_value());
+    CHECK_FALSE(p.canUndoVariate());  // clear is not undoable and drops the variate undo state
+    CHECK(renderPeak(p, 8) == 0.0f);
+}
+
+TEST_CASE("loading a preset forgets the variate undo state", "[processor][variate]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    setChoice(p, "rollType", 3);
+    const auto target = tempDir().getChildFile("variate.dwpreset");
+    target.deleteFile();
+    REQUIRE(p.savePreset(target).wasOk());
+    REQUIRE(p.variate());
+    REQUIRE(p.canUndoVariate());
+    REQUIRE(p.loadPreset(target).wasOk());
+    CHECK_FALSE(p.canUndoVariate());
+}
+
+TEST_CASE("a varied roll still plays", "[processor][variate]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    REQUIRE(p.loadSample(Sample::A, wavFile("tone.wav")));
+    setChoice(p, "rollType", 1);
+    REQUIRE(p.variate());
+    CHECK(renderPeak(p, 8) > 0.05f);
+}

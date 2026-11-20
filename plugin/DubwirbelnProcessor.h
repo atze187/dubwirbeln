@@ -11,6 +11,7 @@
 #include "engine/PluginState.h"
 #include "engine/RollScheduler.h"
 #include "engine/SampleEngine.h"
+#include "engine/Variate.h"
 
 namespace dw {
 
@@ -59,6 +60,14 @@ public:
     juce::Result savePreset(const juce::File& file) const;
     juce::Result loadPreset(const juce::File& file);
 
+    // Variate, Undo and Clear (spec Part 10). Message thread only.
+    bool variate();                 // false when there is no roll
+    bool undoVariate();             // only the last pass
+    bool redoVariate();
+    bool canUndoVariate() const { return history_.canUndo(); }
+    bool canRedoVariate() const { return history_.canRedo(); }
+    void clearRoll();               // not undoable, drops the variate undo state
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     ParameterValues readParameters() const;
@@ -67,6 +76,7 @@ private:
     SamplePtr decodeSample(const Bytes& bytes);
     Preset presetForSave(FileMap& samples) const;
     void installPreset(Preset preset, const FileMap& files);
+    void applyEditedPreset(const Preset& preset);  // takes over fields edited by Variate, Undo or Clear
 
     juce::AudioProcessorValueTreeState apvts_;
 
@@ -101,6 +111,8 @@ private:
     };
     mutable juce::CriticalSection filesLock_;
     std::array<std::optional<StoredFile>, 2> storedFiles_;
+
+    VariateHistory history_;
 
     RollScheduler scheduler_{44100.0};
     SampleEngine engine_{44100.0};
