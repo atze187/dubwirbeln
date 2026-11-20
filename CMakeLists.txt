@@ -22,7 +22,16 @@ FetchContent_Declare(nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
     GIT_TAG v3.11.3
     GIT_SHALLOW ON)
-FetchContent_MakeAvailable(JUCE Catch2 nlohmann_json)
+FetchContent_Declare(miniz
+    GIT_REPOSITORY https://github.com/richgel999/miniz.git
+    GIT_TAG 3.0.2
+    GIT_SHALLOW ON)
+# miniz 3.0.2 still declares cmake_minimum_required below 3.5, which CMake 4 refuses.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
+set(INSTALL_PROJECT OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(JUCE Catch2 nlohmann_json miniz)
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 
 enable_testing()

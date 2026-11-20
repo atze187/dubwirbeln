@@ -27,7 +27,6 @@ target_link_libraries(Dubwirbeln PRIVATE
     dw_engine
     juce::juce_audio_utils
     juce::juce_audio_formats
-    juce::juce_cryptography
     juce::juce_audio_processors
     juce::juce_gui_basics
     juce::juce_recommended_config_flags

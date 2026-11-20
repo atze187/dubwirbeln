@@ -2,11 +2,11 @@
 
 #include <array>
 #include <atomic>
+#include <optional>
 #include <vector>
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <juce_cryptography/juce_cryptography.h>
 
 #include "engine/PluginState.h"
 #include "engine/RollScheduler.h"
@@ -55,11 +55,18 @@ public:
     // only: saving samples comes with the preset container.
     bool loadSample(Sample slot, const juce::File& file);
 
+    // Saves and loads a .dwpreset (preset, samples). Not real-time safe: call from the message thread.
+    juce::Result savePreset(const juce::File& file) const;
+    juce::Result loadPreset(const juce::File& file);
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     ParameterValues readParameters() const;
     void writeParameters(const ParameterValues& values);
     void syncConfig();
+    SamplePtr decodeSample(const Bytes& bytes);
+    Preset presetForSave(FileMap& samples) const;
+    void installPreset(Preset preset, const FileMap& files);
 
     juce::AudioProcessorValueTreeState apvts_;
 
@@ -86,6 +93,14 @@ private:
     std::array<SamplePtr, 2> loadedSamples_;
     std::vector<SamplePtr> retiredSamples_;
     juce::AudioFormatManager formats_;
+
+    // The files of the loaded samples as they are saved (WAV or FLAC bytes), by slot.
+    struct StoredFile {
+        std::string path;  // archive path, e.g. "samples/kick.wav"
+        Bytes bytes;
+    };
+    mutable juce::CriticalSection filesLock_;
+    std::array<std::optional<StoredFile>, 2> storedFiles_;
 
     RollScheduler scheduler_{44100.0};
     SampleEngine engine_{44100.0};
