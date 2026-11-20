@@ -94,4 +94,8 @@ struct ParameterValues {
 ParameterValues toParameterValues(const Preset& preset);
 void applyParameterValues(Preset& preset, const ParameterValues& values);
 
+// The same on a roll config (no allocation): toRollConfig(applyParameterValues(p, v)) equals
+// applyParameterValues(toRollConfig(p), v). The audio thread uses this to follow host automation.
+void applyParameterValues(RollConfig& config, const ParameterValues& values);
+
 }  // namespace dw

@@ -23,30 +23,32 @@ double gridInBeats(Quantize q) {
 }  // namespace
 
 void RollScheduler::reset() {
-    active_.reset();
-    pending_.reset();
+    rolling_ = false;
+    pending_ = false;
 }
 
 void RollScheduler::startRoll(int playedVelocity) {
-    const auto& follow = config_.playback.follow;
+    const auto follow = config_.playback.follow;
     RollSpec spec = config_.spec;
     spec.intensity = effectiveIntensity(spec.intensity, follow, playedVelocity);
 
-    auto triggers = applyWindow(expressTriggers(generateRoll(spec), config_.expression), spec.type,
-                                config_.playback.windowBars);
-    for (auto& t : triggers) t.velocity = followVelocity(t.velocity, follow, playedVelocity);
+    generateRollInto(spec, kUnitsPerBar, scratch_);
+    expressTriggersInto(scratch_, config_.expression, kUnitsPerBar, active_.triggers);
+    applyWindowInto(active_.triggers, spec.type, config_.playback.windowBars);
+    for (size_t i = 0; i < active_.triggers.size(); ++i)
+        active_.triggers[i].velocity = followVelocity(active_.triggers[i].velocity, follow, playedVelocity);
 
     const auto range = windowRange(spec.type, config_.playback.windowBars);
-    Active a;
-    a.fired.assign(triggers.size(), 0);
-    a.triggers = std::move(triggers);
-    a.length = range.end - range.begin;
-    active_ = std::move(a);
-    pending_.reset();
+    std::fill(active_.fired.begin(), active_.fired.end(), char{0});
+    active_.length = range.end - range.begin;
+    active_.pos = 0.0;
+    active_.reverse = false;
+    rolling_ = true;
+    pending_ = false;
 }
 
 // Moves the active roll from sample `cursor` to sample `target` of the block and emits its triggers.
-void RollScheduler::advanceActive(double& cursor, double target, double bpm, std::vector<SchedulerEvent>& out) {
+void RollScheduler::advanceActive(double& cursor, double target, double bpm, EventList& out) {
     const double samplesPerUnit = sampleRate_ * 60.0 / bpm / kUnitsPerBeat;
     const double unitsPerMs = bpm * kUnitsPerBeat / 60000.0;
 
@@ -55,8 +57,8 @@ void RollScheduler::advanceActive(double& cursor, double target, double bpm, std
         out.push_back({SchedulerEvent::Kind::Trigger, s, t.trigger.sample, t.velocity});
     };
 
-    while (active_) {
-        Active& a = *active_;
+    while (rolling_) {
+        Active& a = active_;
         const double phaseEnd = a.reverse ? 2.0 * a.length : a.length;
 
         if (a.pos >= phaseEnd - 1e-9) {
@@ -65,20 +67,21 @@ void RollScheduler::advanceActive(double& cursor, double target, double bpm, std
                 if (!a.fired[i]) emit(a.triggers[i], cursor);
             if (!a.reverse && config_.playback.mode == PlaybackMode::Hold) {
                 // Roll backward: mirrored positions, the trigger at the window start is not repeated.
-                std::vector<ExpressedTrigger> back;
-                for (auto t : a.triggers) {
+                size_t kept = 0;
+                for (size_t i = 0; i < a.triggers.size(); ++i) {
+                    ExpressedTrigger t = a.triggers[i];
                     if (t.trigger.position <= 0) continue;
                     t.trigger.position = static_cast<int>(2.0 * a.length) - t.trigger.position;
                     t.swingUnits = 0.0;
                     t.humanizeMs = 0.0;
-                    back.push_back(t);
+                    a.triggers[kept++] = t;
                 }
-                a.triggers = std::move(back);
-                a.fired.assign(a.triggers.size(), 0);
+                a.triggers.truncate(kept);
+                std::fill(a.fired.begin(), a.fired.end(), char{0});
                 a.reverse = true;
                 continue;
             }
-            active_.reset();
+            rolling_ = false;
             return;
         }
         if (cursor >= target) return;
@@ -106,9 +109,9 @@ void RollScheduler::advanceActive(double& cursor, double target, double bpm, std
     cursor = target;
 }
 
-std::vector<SchedulerEvent> RollScheduler::process(int numSamples, const std::vector<NoteEvent>& notes,
-                                                   const Transport& transport) {
-    std::vector<SchedulerEvent> out;
+void RollScheduler::process(int numSamples, const NoteEvent* notes, int numNotes, const Transport& transport,
+                            EventList& out) {
+    out.clear();
     const double bpm = transport.bpm > 0.0 ? transport.bpm : 120.0;
     const double beatsPerSample = bpm / (60.0 * sampleRate_);
     double cursor = 0.0;
@@ -118,12 +121,12 @@ std::vector<SchedulerEvent> RollScheduler::process(int numSamples, const std::ve
             if (pending_) {
                 double start = std::ceil(cursor - kEps);
                 if (transport.playing) {
-                    const double s = std::ceil((pending_->targetBeat - transport.ppqPosition) / beatsPerSample - kEps);
+                    const double s = std::ceil((pendingTargetBeat_ - transport.ppqPosition) / beatsPerSample - kEps);
                     start = std::max(start, s);
                 }
                 if (start < target) {
                     advanceActive(cursor, start, bpm, out);
-                    startRoll(pending_->velocity);
+                    startRoll(pendingVelocity_);
                     cursor = start;
                     continue;
                 }
@@ -133,7 +136,8 @@ std::vector<SchedulerEvent> RollScheduler::process(int numSamples, const std::ve
         }
     };
 
-    for (const auto& n : notes) {
+    for (int i = 0; i < numNotes && i < static_cast<int>(kMaxNotes); ++i) {
+        const NoteEvent& n = notes[i];
         advanceTo(n.sampleOffset);
         if (n.noteOn && !config_.enabled) {
             continue;  // no roll type: the instrument is silent
@@ -149,21 +153,34 @@ std::vector<SchedulerEvent> RollScheduler::process(int numSamples, const std::ve
             if (immediate) {
                 startRoll(n.velocity);
             } else {
-                pending_ = Pending{target, n.velocity};
+                pending_ = true;
+                pendingTargetBeat_ = target;
+                pendingVelocity_ = n.velocity;
             }
         } else if (config_.playback.mode == PlaybackMode::Hold) {
-            pending_.reset();
-            if (active_) {
+            pending_ = false;
+            if (rolling_) {
                 out.push_back({SchedulerEvent::Kind::Stop, n.sampleOffset, Sample::A, 0});
-                active_.reset();
+                rolling_ = false;
             }
         }
     }
     advanceTo(numSamples);
 
-    std::stable_sort(out.begin(), out.end(),
-                     [](const SchedulerEvent& a, const SchedulerEvent& b) { return a.sampleOffset < b.sampleOffset; });
-    return out;
+    // Stable insertion sort by sample offset: the events are nearly sorted, and this does not allocate.
+    for (size_t i = 1; i < out.size(); ++i) {
+        const SchedulerEvent e = out[i];
+        size_t j = i;
+        for (; j > 0 && e.sampleOffset < out[j - 1].sampleOffset; --j) out[j] = out[j - 1];
+        out[j] = e;
+    }
+}
+
+std::vector<SchedulerEvent> RollScheduler::process(int numSamples, const std::vector<NoteEvent>& notes,
+                                                   const Transport& transport) {
+    EventList list;
+    process(numSamples, notes.data(), static_cast<int>(notes.size()), transport, list);
+    return std::vector<SchedulerEvent>(list.begin(), list.end());
 }
 
 }  // namespace dw

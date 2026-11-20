@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "engine/FixedVector.h"
+
 namespace dw {
 
 enum class RollType { Build, Drop, Rush, Burst, Wave };
@@ -34,6 +36,13 @@ struct Phase {
 constexpr int kUnitsPerBar = 64;  // 4/4 in 1/64 units
 constexpr int kReferenceBars = 4;
 
+// Allocation-free variants for the audio thread. At 4/4 a roll has at most one trigger per 1/64
+// unit, so 256 triggers is the most a 4-bar reference can hold; more would be dropped.
+constexpr std::size_t kMaxTriggers = 256;
+constexpr std::size_t kMaxPhases = 8;
+using TriggerList = FixedVector<Trigger, kMaxTriggers>;
+using PhaseList = FixedVector<Phase, kMaxPhases>;
+
 // Stubs: the tests are written first and must fail against these.
 double holdShare(double intensity);
 double burstShare(double intensity);
@@ -54,6 +63,11 @@ struct WindowRange {
     int shift = 0;
 };
 WindowRange windowRange(RollType type, double windowBars, int barUnits = kUnitsPerBar);
+
+void planPhasesInto(RollType type, double intensity, std::uint32_t variationSeed, PhaseList& out);
+void generateRollInto(const RollSpec& spec, int barUnits, TriggerList& out);
+// Trims the list in place, like applyWindow.
+void applyWindowInto(TriggerList& triggers, RollType type, double windowBars, int barUnits = kUnitsPerBar);
 
 std::vector<Trigger> applyWindow(const std::vector<Trigger>& triggers, RollType type,
                                  double windowBars, int barUnits = kUnitsPerBar);

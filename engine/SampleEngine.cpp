@@ -134,11 +134,16 @@ void SampleEngine::render(float* left, float* right, int from, int to) {
 }
 
 void SampleEngine::process(float* left, float* right, int numSamples, const std::vector<SchedulerEvent>& events) {
+    process(left, right, numSamples, events.data(), static_cast<int>(events.size()));
+}
+
+void SampleEngine::process(float* left, float* right, int numSamples, const SchedulerEvent* events, int numEvents) {
     std::fill(left, left + numSamples, 0.0f);
     std::fill(right, right + numSamples, 0.0f);
 
     int cursor = 0;
-    for (const auto& e : events) {
+    for (int i = 0; i < numEvents; ++i) {
+        const auto& e = events[i];
         const int at = std::clamp(e.sampleOffset, cursor, numSamples);
         render(left, right, cursor, at);
         cursor = at;

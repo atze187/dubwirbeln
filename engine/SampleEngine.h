@@ -48,6 +48,7 @@ public:
 
     // Overwrites the buffers. `events` must be sorted by sampleOffset (as the scheduler returns them).
     void process(float* left, float* right, int numSamples, const std::vector<SchedulerEvent>& events);
+    void process(float* left, float* right, int numSamples, const SchedulerEvent* events, int numEvents);
 
     int activeVoices() const;
 
