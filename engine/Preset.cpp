@@ -285,7 +285,7 @@ PresetParseResult presetFromJson(const std::string& text) {
 RollConfig toRollConfig(const Preset& p) {
     RollConfig c;
     c.enabled = p.rollType.has_value();
-    c.spec = {p.rollType.value_or(RollType::Build), p.intensity, p.blend};
+    c.spec = {p.rollType.value_or(RollType::Build), p.intensity, p.blend, p.variationSeed};
     c.expression.curve = p.curve;
     c.expression.humanize = p.humanize;
     c.expression.swing = p.swing;

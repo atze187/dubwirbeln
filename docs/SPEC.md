@@ -320,6 +320,13 @@ Determinism: Variate acts once. After saving there is no randomness; the result 
 
 **Zone rule (DECIDED, closes OPEN-6):** Variate keeps Intensity inside its current Intensity zone (0-24, 25-49, 50-100 %). The +/-15 point change is clamped to the zone boundaries, so Variate never changes which grid levels a roll reaches (e.g. 49 % never gains 1/64).
 
+**Variate details (DECIDED, `engine/Variate`, `engine/RollGenerator`):**
+- One pass takes all its randomness from a pass seed (the caller picks it at random; 0 becomes 1) via PCG32 stream 7, in this order: Intensity, Blend, then every curve point. Intensity changes by a uniform amount in +/-15 points, Blend in +/-20 points; both are rounded to 0.1. Intensity is clamped to its zone: 0-24.9, 25-49.9, 50-100. Each curve point moves by a whole number in +/-10 and is clamped to 1..127. The pass seed becomes `variation.seed`. A preset without a roll is not varied.
+- Density DNA fine distribution (stream 101): the shares of all phases that are not held are multiplied by `1 + 0.15 * u` (`u` uniform in -1..1, one draw per phase in phase order) and scaled back so their sum stays the same. Hold time and grid levels do not change. BURST has a single phase and WAVE has no hold, so WAVE redistributes all four quarters.
+- Sample DNA expression (stream 102): a strength `0.2 * u` is drawn once. In every run of consecutive triggers on the same grid level, `round(strength * n)` distinct triggers swap A and B (partial Fisher-Yates). It is applied to the whole 4-bar reference before the window trims it.
+- With `variation.seed = 0` neither change happens.
+- Redo is possible until the next pass, Clear or loading a preset. The undo state is not saved.
+
 ### Undo (DECIDED)
 
 Undo/Redo applies only to **the last Variate pass** (a single level, no chain). If the user likes a variation they save the preset. This replaces the earlier multi-step Variate undo chain.

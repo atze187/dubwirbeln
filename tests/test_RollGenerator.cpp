@@ -1,12 +1,16 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
+#include <set>
 #include <string>
 #include <vector>
 
 #include "engine/RollGenerator.h"
 
 using namespace dw;
+using Catch::Approx;
 using Catch::Matchers::WithinAbs;
 
 namespace {
@@ -312,4 +316,160 @@ TEST_CASE("WAVE trims the early portion") {
     REQUIRE(w.size() == 48u);  // 16 + 32 from the last two phases
     REQUIRE(w.front().position >= 0);
     for (const auto& x : w) REQUIRE(x.position < 2 * kUnitsPerBar);
+}
+
+// ---- variation seed (spec Part 10) ----
+// Reference values for the seed-derived changes come from an independent Python PCG32.
+
+namespace {
+
+std::vector<Trigger> run(int grid, int count, Sample s, int startPosition = 0) {
+    std::vector<Trigger> out;
+    for (int i = 0; i < count; ++i) out.push_back({startPosition + i, grid, s});
+    return out;
+}
+
+int countOf(const std::vector<Trigger>& t, Sample s) {
+    return static_cast<int>(std::count_if(t.begin(), t.end(), [&](const Trigger& x) { return x.sample == s; }));
+}
+
+}  // namespace
+
+TEST_CASE("the held phase is marked, without a seed nothing changes", "[variation][plan]") {
+    const auto build = planPhases(RollType::Build, 100.0);
+    REQUIRE(build.size() == 4);
+    for (size_t i = 0; i < build.size(); ++i) CHECK(build[i].hold == (i == 3));
+    const auto drop = planPhases(RollType::Drop, 100.0);
+    REQUIRE(drop.size() == 4);
+    for (size_t i = 0; i < drop.size(); ++i) CHECK(drop[i].hold == (i == 0));
+    for (const auto& p : planPhases(RollType::Wave, 100.0)) CHECK_FALSE(p.hold);
+    for (const auto& p : planPhases(RollType::Burst, 100.0)) CHECK_FALSE(p.hold);
+
+    const auto seeded0 = planPhases(RollType::Build, 100.0, 0);
+    REQUIRE(seeded0.size() == build.size());
+    for (size_t i = 0; i < build.size(); ++i) CHECK(seeded0[i].share == build[i].share);
+}
+
+TEST_CASE("a seed shifts the phase shares by up to 15 percent and renormalizes", "[variation][plan]") {
+    const auto phases = planPhases(RollType::Build, 100.0, 5);  // Python: 0.22628, 0.19363, 0.18009, hold 0.4
+    REQUIRE(phases.size() == 4);
+    CHECK(phases[0].share == Approx(0.2262781960698399));
+    CHECK(phases[1].share == Approx(0.19363445077830152));
+    CHECK(phases[2].share == Approx(0.18008735315185873));
+    CHECK(phases[3].share == Approx(0.4));
+    CHECK(phases[3].hold);
+}
+
+TEST_CASE("a seed keeps grid levels, hold time and the total", "[variation][plan]") {
+    for (auto type : {RollType::Build, RollType::Drop, RollType::Rush, RollType::Wave}) {
+        for (double intensity : {10.0, 40.0, 60.0, 100.0}) {
+            const auto base = planPhases(type, intensity);
+            for (std::uint32_t seed : {1u, 2u, 77u, 4000000000u}) {
+                const auto varied = planPhases(type, intensity, seed);
+                REQUIRE(varied.size() == base.size());
+                double total = 0.0;
+                bool changed = false;
+                for (size_t i = 0; i < base.size(); ++i) {
+                    CHECK(varied[i].grid == base[i].grid);
+                    CHECK(varied[i].hold == base[i].hold);
+                    if (base[i].hold) CHECK(varied[i].share == base[i].share);
+                    else {
+                        const double ratio = varied[i].share / base[i].share;
+                        CHECK(ratio > 0.85 / 1.15 - 1e-9);
+                        CHECK(ratio < 1.15 / 0.85 + 1e-9);
+                    }
+                    if (varied[i].share != base[i].share) changed = true;
+                    total += varied[i].share;
+                }
+                CHECK(total == Approx(1.0).margin(1e-12));
+                const auto movable = std::count_if(base.begin(), base.end(), [](const Phase& ph) { return !ph.hold; });
+                if (movable >= 2) CHECK(changed);  // one movable phase has nothing to trade with
+            }
+        }
+    }
+}
+
+TEST_CASE("a single-phase BURST has nothing to redistribute", "[variation][plan]") {
+    const auto base = planPhases(RollType::Burst, 60.0);
+    const auto varied = planPhases(RollType::Burst, 60.0, 9);
+    REQUIRE(base.size() == 1);
+    REQUIRE(varied.size() == 1);
+    CHECK(varied[0].share == Approx(base[0].share));
+}
+
+TEST_CASE("sample variation with seed 0 changes nothing", "[variation][samples]") {
+    auto t = run(64, 50, Sample::A);
+    varySamples(t, 0);
+    CHECK(countOf(t, Sample::B) == 0);
+}
+
+TEST_CASE("sample variation matches the independent reference", "[variation][samples]") {
+    auto t = run(64, 100, Sample::A);
+    varySamples(t, 5);  // Python: 19 flips at 0, 2, 3, 5, 7, 11, 14, 16, 33, 39, 44, 45, 54, 57, 60, 67, 70, 79, 96
+    const std::vector<int> expected = {0, 2, 3, 5, 7, 11, 14, 16, 33, 39, 44, 45, 54, 57, 60, 67, 70, 79, 96};
+    std::vector<int> flipped;
+    for (size_t i = 0; i < t.size(); ++i)
+        if (t[i].sample == Sample::B) flipped.push_back(static_cast<int>(i));
+    CHECK(flipped == expected);
+}
+
+TEST_CASE("sample variation flips up to 20 percent, depending on the seed", "[variation][samples]") {
+    const int expected[] = {16, 4, 16, 6, 19, 16, 16, 14};  // seeds 1..8, Python
+    for (std::uint32_t seed = 1; seed <= 8; ++seed) {
+        auto t = run(64, 100, Sample::A);
+        varySamples(t, seed);
+        CHECK(countOf(t, Sample::B) == expected[seed - 1]);
+    }
+}
+
+TEST_CASE("sample variation swaps in both directions and leaves positions alone", "[variation][samples]") {
+    auto t = run(32, 100, Sample::B);
+    const auto before = t;
+    varySamples(t, 5);
+    CHECK(countOf(t, Sample::A) == 19);
+    for (size_t i = 0; i < t.size(); ++i) {
+        CHECK(t[i].position == before[i].position);
+        CHECK(t[i].grid == before[i].grid);
+    }
+}
+
+TEST_CASE("sample variation works per run of equal grid levels", "[variation][samples]") {
+    auto t = run(16, 50, Sample::A);
+    const auto second = run(32, 50, Sample::A, 50);
+    t.insert(t.end(), second.begin(), second.end());
+    varySamples(t, 3);  // strength 0.158: round(0.158 * 50) = 8 flips in every run
+    int firstRun = 0, secondRun = 0;
+    for (size_t i = 0; i < t.size(); ++i)
+        if (t[i].sample == Sample::B) (i < 50 ? firstRun : secondRun)++;
+    CHECK(firstRun == 8);
+    CHECK(secondRun == 8);
+}
+
+TEST_CASE("sample variation is deterministic", "[variation][samples]") {
+    auto a = run(64, 100, Sample::A);
+    auto b = run(64, 100, Sample::A);
+    varySamples(a, 12345);
+    varySamples(b, 12345);
+    CHECK(a == b);
+    auto c = run(64, 100, Sample::A);
+    varySamples(c, 12346);
+    CHECK_FALSE(a == c);
+}
+
+TEST_CASE("a rolled sequence with a seed differs from the base roll but keeps the grid levels", "[variation][roll]") {
+    RollSpec base{RollType::Build, 70.0, 50.0};
+    RollSpec varied = base;
+    varied.variationSeed = 77;
+    const auto a = generateRoll(base);
+    const auto b = generateRoll(varied);
+    REQUIRE_FALSE(a.empty());
+    REQUIRE_FALSE(b.empty());
+    CHECK_FALSE(a == b);
+    std::set<int> gridsA, gridsB;
+    for (const auto& t : a) gridsA.insert(t.grid);
+    for (const auto& t : b) gridsB.insert(t.grid);
+    CHECK(gridsA == gridsB);
+    CHECK(generateRoll(varied) == b);  // deterministic
+    varied.variationSeed = 0;
+    CHECK(generateRoll(varied) == a);  // seed 0 = no variation
 }

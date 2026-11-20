@@ -326,8 +326,53 @@ void DubwirbelnProcessor::installPreset(Preset preset, const FileMap& files) {
         const juce::ScopedLock lock(filesLock_);
         storedFiles_ = std::move(stored);
     }
+    history_.clear();  // a loaded preset starts without undo state
     writeParameters(values);
     presetRevision_.fetch_add(1);
+}
+
+// Takes over the fields Variate, Undo and Clear change; the samples stay as they are.
+void DubwirbelnProcessor::applyEditedPreset(const Preset& preset) {
+    const auto values = toParameterValues(preset);
+    {
+        const juce::SpinLock::ScopedLockType lock(presetLock_);
+        storedPreset_.gesture = preset.gesture;
+        storedPreset_.curve = preset.curve;
+        storedPreset_.variationSeed = preset.variationSeed;
+    }
+    writeParameters(values);
+    presetRevision_.fetch_add(1);
+}
+
+bool DubwirbelnProcessor::variate() {
+    Preset preset = currentPreset();
+    const auto before = variateSnapshot(preset);
+    const auto passSeed = static_cast<std::uint32_t>(juce::Random::getSystemRandom().nextInt64());
+    if (!applyVariate(preset, passSeed)) return false;
+    history_.record(before, variateSnapshot(preset));
+    applyEditedPreset(preset);
+    return true;
+}
+
+bool DubwirbelnProcessor::undoVariate() {
+    Preset preset = currentPreset();
+    if (!history_.undo(preset)) return false;
+    applyEditedPreset(preset);
+    return true;
+}
+
+bool DubwirbelnProcessor::redoVariate() {
+    Preset preset = currentPreset();
+    if (!history_.redo(preset)) return false;
+    applyEditedPreset(preset);
+    return true;
+}
+
+void DubwirbelnProcessor::clearRoll() {
+    Preset preset = currentPreset();
+    dw::clearRoll(preset);
+    history_.clear();
+    applyEditedPreset(preset);
 }
 
 void DubwirbelnProcessor::getStateInformation(juce::MemoryBlock& destData) {
