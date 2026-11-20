@@ -20,6 +20,7 @@ struct PlaybackSettings {
 };
 
 struct RollConfig {
+    bool enabled = true;  // false = no roll (preset without a roll type): the instrument is silent
     RollSpec spec;
     ExpressionSpec expression;
     PlaybackSettings playback;
