@@ -1,12 +1,16 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <vector>
 
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_cryptography/juce_cryptography.h>
 
 #include "engine/PluginState.h"
 #include "engine/RollScheduler.h"
+#include "engine/SampleEngine.h"
 
 namespace dw {
 
@@ -47,6 +51,10 @@ public:
     // The preset as it currently sounds: stored fields plus the current parameter values.
     Preset currentPreset() const;
 
+    // Loads WAV, AIFF, FLAC or MP3 into a sample slot (message thread). The audio is kept in memory
+    // only: saving samples comes with the preset container.
+    bool loadSample(Sample slot, const juce::File& file);
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     ParameterValues readParameters() const;
@@ -74,7 +82,13 @@ private:
     ParameterValues appliedValues_;
     bool configApplied_ = false;
 
+    // Decoded samples. Owned here so that the audio thread never drops the last reference.
+    std::array<SamplePtr, 2> loadedSamples_;
+    std::vector<SamplePtr> retiredSamples_;
+    juce::AudioFormatManager formats_;
+
     RollScheduler scheduler_{44100.0};
+    SampleEngine engine_{44100.0};
     std::atomic<int> triggerNote_{kDefaultTriggerNote};
     std::vector<NoteEvent> notes_;
 

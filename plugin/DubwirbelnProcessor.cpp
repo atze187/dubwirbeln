@@ -51,11 +51,13 @@ DubwirbelnProcessor::DubwirbelnProcessor()
     // The humanize seed is assigned once, when the instance is created, and then stored (spec Part 7).
     storedPreset_ = defaultPreset(static_cast<std::uint32_t>(juce::Random::getSystemRandom().nextInt64()));
     notes_.reserve(256);
+    formats_.registerBasicFormats();
 }
 
 void DubwirbelnProcessor::prepareToPlay(double sampleRate, int) {
     scheduler_.setSampleRate(sampleRate);
     scheduler_.reset();
+    engine_.setSampleRate(sampleRate);
     configApplied_ = false;
 }
 
@@ -104,6 +106,12 @@ void DubwirbelnProcessor::syncConfig() {
     Preset preset = storedPreset_;
     applyParameterValues(preset, values);
     scheduler_.setConfig(toRollConfig(preset));
+    for (const auto slot : {Sample::A, Sample::B}) {
+        const auto& stored = slot == Sample::A ? preset.sampleA : preset.sampleB;
+        SampleParams params;
+        if (stored) params = {stored->tuneSemitones, stored->start, stored->end, stored->levelDb};
+        engine_.setSample(slot, loadedSamples_[slot == Sample::A ? 0 : 1], params);
+    }
     appliedValues_ = values;
     appliedRevision_ = revision;
     configApplied_ = true;
@@ -136,9 +144,53 @@ void DubwirbelnProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         }
     }
 
-    // The triggers have no sample engine to play them yet.
-    scheduler_.process(buffer.getNumSamples(), notes_, transport);
-    buffer.clear();
+    const auto events = scheduler_.process(buffer.getNumSamples(), notes_, transport);
+    if (buffer.getNumChannels() < 2) {
+        buffer.clear();
+        return;
+    }
+    engine_.process(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples(), events);
+}
+
+bool DubwirbelnProcessor::loadSample(Sample slot, const juce::File& file) {
+    constexpr juce::int64 kMaxFrames = 10'000'000;  // about 3.5 minutes at 48 kHz
+    std::unique_ptr<juce::AudioFormatReader> reader(formats_.createReaderFor(file));
+    if (!reader || reader->lengthInSamples <= 0 || reader->lengthInSamples > kMaxFrames || reader->numChannels == 0)
+        return false;
+
+    const auto frames = static_cast<int>(reader->lengthInSamples);
+    const int channels = static_cast<int>(std::min<unsigned>(reader->numChannels, 2u));
+    juce::AudioBuffer<float> buffer(channels, frames);
+    if (!reader->read(&buffer, 0, frames, 0, true, channels > 1)) return false;
+
+    auto data = std::make_shared<SampleData>();
+    data->sampleRate = reader->sampleRate;
+    data->left.assign(buffer.getReadPointer(0), buffer.getReadPointer(0) + frames);
+    if (channels > 1) data->right.assign(buffer.getReadPointer(1), buffer.getReadPointer(1) + frames);
+
+    SampleSlot stored;
+    stored.name = file.getFileName().toStdString();
+    stored.sha256 = juce::SHA256(file).toHexString().toStdString();
+    stored.file = "samples/" + file.getFileNameWithoutExtension().toStdString() + ".wav";
+
+    {
+        const juce::SpinLock::ScopedLockType lock(presetLock_);
+        auto& target = slot == Sample::A ? storedPreset_.sampleA : storedPreset_.sampleB;
+        if (target) {  // keep tune, start, end and level of the slot
+            stored.tuneSemitones = target->tuneSemitones;
+            stored.start = target->start;
+            stored.end = target->end;
+            stored.levelDb = target->levelDb;
+        }
+        target = stored;
+        auto& loaded = loadedSamples_[slot == Sample::A ? 0 : 1];
+        if (loaded) retiredSamples_.push_back(std::move(loaded));
+        // The audio thread has long moved on from samples retired several loads ago.
+        if (retiredSamples_.size() > 4) retiredSamples_.erase(retiredSamples_.begin());
+        loaded = std::move(data);
+    }
+    presetRevision_.fetch_add(1);
+    return true;
 }
 
 juce::AudioProcessorEditor* DubwirbelnProcessor::createEditor() {
