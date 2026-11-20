@@ -135,7 +135,9 @@ std::vector<SchedulerEvent> RollScheduler::process(int numSamples, const std::ve
 
     for (const auto& n : notes) {
         advanceTo(n.sampleOffset);
-        if (n.noteOn) {
+        if (n.noteOn && !config_.enabled) {
+            continue;  // no roll type: the instrument is silent
+        } else if (n.noteOn) {
             const double grid = gridInBeats(config_.playback.quantize);
             bool immediate = grid <= 0.0 || !transport.playing;
             double target = 0.0;

@@ -18,7 +18,11 @@ FetchContent_Declare(Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG v3.16.0
     GIT_SHALLOW ON)
-FetchContent_MakeAvailable(JUCE Catch2)
+FetchContent_Declare(nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+    GIT_SHALLOW ON)
+FetchContent_MakeAvailable(JUCE Catch2 nlohmann_json)
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 
 enable_testing()

@@ -311,3 +311,16 @@ TEST_CASE("reset silences the scheduler", "[scheduler]") {
     CHECK_FALSE(s.isPending());
     CHECK(s.process(4000, {}, stopped()).empty());
 }
+
+TEST_CASE("a disabled config (no roll type) stays silent", "[scheduler]") {
+    auto cfg = baseConfig();
+    cfg.enabled = false;
+    RollScheduler s(kRate);
+    s.setConfig(cfg);
+    CHECK(s.process(4096, {noteOn(0)}, stopped()).empty());
+    CHECK_FALSE(s.isRolling());
+    cfg.playback.quantize = Quantize::Quarter;
+    s.setConfig(cfg);
+    CHECK(s.process(4096, {noteOn(0)}, playingAt(0.1)).empty());
+    CHECK_FALSE(s.isPending());
+}

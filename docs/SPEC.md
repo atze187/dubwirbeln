@@ -360,6 +360,15 @@ Used for a new preset and as the reset values for Clear:
 | Velocity Follow | VELOCITY + INTENSITY         |
 | `variation.seed`| 0                            |
 
+### Host parameters and plugin state (DECIDED)
+
+- The scalar preset values are **host parameters** (automatable): Roll Type (None, Build, Drop, Rush, Burst, Wave), Intensity, Blend, Window, Mode, Quantize, Humanize, Swing, Velocity Follow. The index order of the choice parameters is fixed in `ParameterValues` (`engine/Preset.h`).
+- Velocity curve, seeds, gesture, samples and the preset name are plugin state, not parameters.
+- The plugin state is saved as JSON (`engine/PluginState.h`): `{ "stateVersion", "triggerNote", "preset" }`, where `preset` has the format of `schemas/preset.schema.json`. The trigger note belongs to the instance and is never part of the preset (Part 9). The parameter values in the state are those of the preset object.
+- Loading a state sets the parameters from its preset. A state that cannot be read is ignored and the instance keeps its current values.
+- A preset without a roll type (`rollType: null`) is silent: Note-On starts nothing.
+- When a preset is read, velocity curve points are sorted by position; unknown fields are rejected (except `metadata`, which is kept untouched).
+
 ### Container format (DECIDED, closes TODO-005)
 
 `.dwpreset` and `.dwbank` are both **ZIP archives** with a `manifest.json` in the archive root. `manifest.json` carries `schemaVersion` and the preset or bank description.
