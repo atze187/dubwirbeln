@@ -58,6 +58,7 @@ DubwirbelnProcessor::DubwirbelnProcessor()
     }
     rtConfig_.expression.curve.reserve(kMaxCurvePoints);  // the audio thread copies into this: no allocation
     formats_.registerBasicFormats();
+    markClean();  // a new instance holds an unmodified default preset
 }
 
 void DubwirbelnProcessor::prepareToPlay(double sampleRate, int) {
@@ -138,16 +139,20 @@ void DubwirbelnProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     juce::ScopedNoDenormals noDenormals;
     syncConfig();
 
-    // Only Note-On/Off of the trigger note on any channel matter (spec Part 9).
-    const int triggerNote = triggerNote_.load();
+    // Only Note-On/Off of the trigger note on any channel matter (spec Part 9); while MIDI Learn is
+    // on, the next Note-On becomes the trigger note instead.
     notes_.clear();
     for (const auto meta : midi) {
         const auto message = meta.getMessage();
-        if (message.getNoteNumber() != triggerNote) continue;
-        if (message.isNoteOn())
-            notes_.push_back({meta.samplePosition, true, message.getVelocity()});
-        else if (message.isNoteOff())
-            notes_.push_back({meta.samplePosition, false, 0});
+        const bool on = message.isNoteOn();    // velocity above 0
+        const bool off = message.isNoteOff();  // includes Note-On with velocity 0
+        if (!on && !off) continue;
+        switch (input_.handle(on, off, message.getNoteNumber())) {
+            case TriggerInput::Action::NoteOn: notes_.push_back({meta.samplePosition, true, message.getVelocity()}); break;
+            case TriggerInput::Action::NoteOff: notes_.push_back({meta.samplePosition, false, 0}); break;
+            case TriggerInput::Action::Learned:
+            case TriggerInput::Action::Ignore: break;
+        }
     }
     midi.clear();
 
@@ -347,6 +352,19 @@ void DubwirbelnProcessor::installPreset(Preset preset, const FileMap& files) {
     history_.clear();  // a loaded preset starts without undo state
     writeParameters(values);
     presetRevision_.fetch_add(1);
+    markClean();  // a loaded preset is not dirty (parameters may have rounded its values, so measure after)
+}
+
+void DubwirbelnProcessor::markClean() {
+    const Preset now = currentPreset();
+    const juce::ScopedLock lock(baselineLock_);
+    baseline_ = now;
+}
+
+bool DubwirbelnProcessor::isDirty() const {
+    const Preset now = currentPreset();
+    const juce::ScopedLock lock(baselineLock_);
+    return !presetsEquivalent(now, baseline_);
 }
 
 // Takes over the fields Variate, Undo and Clear change; the samples stay as they are.
@@ -396,9 +414,13 @@ void DubwirbelnProcessor::clearRoll() {
 
 void DubwirbelnProcessor::getStateInformation(juce::MemoryBlock& destData) {
     PluginState state;
-    state.triggerNote = triggerNote_.load();
+    state.triggerNote = input_.note();
     FileMap samples;
     state.preset = presetForSave(samples);
+    {
+        const juce::ScopedLock lock(baselineLock_);
+        state.baseline = baseline_;  // so a project that is saved with unsaved changes still shows them
+    }
     const auto written = pluginStateToBytes(state, samples);
     if (!written.ok()) return;
     destData.replaceAll(written.bytes.data(), written.bytes.size());
@@ -410,8 +432,13 @@ void DubwirbelnProcessor::setStateInformation(const void* data, int sizeInBytes)
     auto parsed = pluginStateFromBytes(Bytes(begin, begin + sizeInBytes));
     if (!parsed.state) return;  // unknown or damaged state: keep what we have
 
-    triggerNote_.store(parsed.state->triggerNote);
+    input_.cancelLearn();
+    input_.setNote(parsed.state->triggerNote);
     installPreset(std::move(parsed.state->preset), parsed.samples);
+    if (parsed.state->baseline) {
+        const juce::ScopedLock lock(baselineLock_);
+        baseline_ = *parsed.state->baseline;
+    }
 }
 
 juce::Result DubwirbelnProcessor::savePreset(const juce::File& file) const {
@@ -421,6 +448,10 @@ juce::Result DubwirbelnProcessor::savePreset(const juce::File& file) const {
     if (!written.ok()) return juce::Result::fail(written.error);
     if (!file.replaceWithData(written.bytes.data(), written.bytes.size()))
         return juce::Result::fail("cannot write " + file.getFullPathName());
+    {
+        const juce::ScopedLock lock(baselineLock_);
+        baseline_ = archive.preset;  // saved: the preset is clean again
+    }
     return juce::Result::ok();
 }
 

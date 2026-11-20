@@ -16,6 +16,8 @@ constexpr int kDefaultTriggerNote = 36;  // C1 (spec Part 9)
 struct PluginState {
     int triggerNote = kDefaultTriggerNote;
     Preset preset;
+    // The preset as it was last saved or loaded: what "dirty" is measured against. Not set = clean.
+    std::optional<Preset> baseline;
 };
 
 std::string pluginStateToJson(const PluginState& state);

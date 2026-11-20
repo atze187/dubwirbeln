@@ -170,3 +170,46 @@ TEST_CASE("broken binary states are rejected", "[state][bytes]") {
     REQUIRE(badZip.ok());
     CHECK_FALSE(pluginStateFromBytes(badZip.bytes).state.has_value());
 }
+
+// ---- the baseline for dirty tracking ----
+
+TEST_CASE("the saved baseline travels with the state", "[state][bytes][dirty]") {
+    PluginState s = sampleState();
+    Preset baseline = s.preset;
+    baseline.intensity = 12.5;
+    baseline.name = "As saved";
+    s.baseline = baseline;
+
+    const auto written = pluginStateToBytes(s, {});
+    REQUIRE(written.ok());
+    const auto r = pluginStateFromBytes(written.bytes);
+    REQUIRE(r.state.has_value());
+    REQUIRE(r.state->baseline.has_value());
+    CHECK(r.state->baseline->name == "As saved");
+    CHECK(r.state->baseline->intensity == Approx(12.5));
+    CHECK(r.state->preset.name == "State test");
+}
+
+TEST_CASE("a state without a baseline reads without one", "[state][bytes][dirty]") {
+    const auto written = pluginStateToBytes(sampleState(), {});
+    REQUIRE(written.ok());
+    const auto r = pluginStateFromBytes(written.bytes);
+    REQUIRE(r.state.has_value());
+    CHECK_FALSE(r.state->baseline.has_value());
+}
+
+TEST_CASE("a damaged baseline is ignored, the state still loads", "[state][bytes][dirty]") {
+    PresetArchive a;
+    a.preset = defaultPreset(1);
+    const std::string instance = R"({"stateVersion":1,"triggerNote":50})";
+    a.extras["instance.json"] = Bytes(instance.begin(), instance.end());
+    const std::string bad = R"({"not":"a preset"})";
+    a.extras["baseline.json"] = Bytes(bad.begin(), bad.end());
+    const auto zip = writePresetArchive(a);
+    REQUIRE(zip.ok());
+    const auto r = pluginStateFromBytes(zip.bytes);
+    INFO(r.error);
+    REQUIRE(r.state.has_value());
+    CHECK(r.state->triggerNote == 50);
+    CHECK_FALSE(r.state->baseline.has_value());
+}

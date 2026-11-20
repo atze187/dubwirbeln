@@ -7,6 +7,7 @@
 
 #include "AllocGuard.h"
 #include "engine/Sha256.h"
+#include "engine/PresetArchive.h"
 #include "plugin/DubwirbelnProcessor.h"
 
 using namespace dw;
@@ -442,4 +443,212 @@ TEST_CASE("parameter changes and preset edits do not make processBlock allocate"
         allocations += guard.allocations();
     }
     CHECK(allocations == 0);
+}
+
+// ---- MIDI Learn and the trigger note (spec Part 9) ----
+
+namespace {
+
+void setPercent(DubwirbelnProcessor& p, const char* id, float plain) {
+    for (auto* parameter : p.getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*>(parameter); rp && rp->paramID == id)
+            rp->setValueNotifyingHost(rp->convertTo0to1(plain));
+}
+
+// One block of 512 samples with a Note-On of `note` in it (if note >= 0); returns the peak.
+float blockWithNote(DubwirbelnProcessor& p, int note) {
+    juce::AudioBuffer<float> buffer(2, 512);
+    buffer.clear();
+    juce::MidiBuffer midi;
+    if (note >= 0) midi.addEvent(juce::MidiMessage::noteOn(1, note, static_cast<juce::uint8>(127)), 0);
+    p.processBlock(buffer, midi);
+    return buffer.getMagnitude(0, 512);  // both channels
+}
+
+float quietBlocks(DubwirbelnProcessor& p, int blocks) {
+    float peak = 0.0f;
+    for (int i = 0; i < blocks; ++i) peak = std::max(peak, blockWithNote(p, -1));
+    return peak;
+}
+
+DubwirbelnProcessor& playable(DubwirbelnProcessor& p) {
+    REQUIRE(p.loadSample(Sample::A, wavFile("tone.wav")));
+    REQUIRE(p.loadSample(Sample::B, wavFile("tone2.wav", 660.0)));
+    setChoice(p, "rollType", 1);  // Build
+    p.prepareToPlay(48000.0, 512);
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("the trigger note is C1 by default and can be typed in", "[processor][midi]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    CHECK(p.triggerNote() == 36);
+    playable(p);
+    p.setTriggerNote(60);
+    CHECK(p.triggerNote() == 60);
+    CHECK(blockWithNote(p, 36) == 0.0f);  // the old note does nothing now
+    CHECK(quietBlocks(p, 4) == 0.0f);
+    CHECK(blockWithNote(p, 60) > 0.0f);
+}
+
+TEST_CASE("MIDI Learn takes the next Note-On, which does not start a roll", "[processor][midi]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    playable(p);
+    p.startMidiLearn();
+    CHECK(p.isMidiLearning());
+
+    CHECK(blockWithNote(p, 52) == 0.0f);
+    CHECK(quietBlocks(p, 4) == 0.0f);
+    CHECK_FALSE(p.isMidiLearning());
+    CHECK(p.triggerNote() == 52);
+
+    CHECK(blockWithNote(p, 36) == 0.0f);  // the old note is out
+    CHECK(blockWithNote(p, 52) > 0.0f);   // the learned one plays
+}
+
+TEST_CASE("MIDI Learn can be cancelled", "[processor][midi]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    playable(p);
+    p.startMidiLearn();
+    p.cancelMidiLearn();
+    CHECK_FALSE(p.isMidiLearning());
+    CHECK(blockWithNote(p, 52) == 0.0f);
+    CHECK(p.triggerNote() == 36);
+}
+
+TEST_CASE("the trigger note is saved with the state, MIDI Learn is not", "[processor][midi]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor a;
+    a.setTriggerNote(47);
+    a.startMidiLearn();
+    const auto state = stateOf(a);
+
+    DubwirbelnProcessor b;
+    b.startMidiLearn();
+    b.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    CHECK(b.triggerNote() == 47);
+    CHECK_FALSE(b.isMidiLearning());
+}
+
+TEST_CASE("the trigger note does not belong to the preset", "[processor][midi]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor a;
+    a.setTriggerNote(47);
+    const auto target = tempDir().getChildFile("note.dwpreset");
+    target.deleteFile();
+    REQUIRE(a.savePreset(target).wasOk());
+
+    DubwirbelnProcessor b;
+    b.setTriggerNote(55);
+    REQUIRE(b.loadPreset(target).wasOk());
+    CHECK(b.triggerNote() == 55);  // loading a preset never changes it
+}
+
+// ---- dirty tracking (spec Part 11) ----
+
+TEST_CASE("a new instance is not dirty, a change is, changing back is not", "[processor][dirty]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    CHECK_FALSE(p.isDirty());
+    setPercent(p, "intensity", 71.0f);
+    CHECK(p.isDirty());
+    setPercent(p, "intensity", 50.0f);
+    CHECK_FALSE(p.isDirty());
+}
+
+TEST_CASE("saving makes the preset clean, a further change makes it dirty again", "[processor][dirty]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    REQUIRE(p.loadSample(Sample::A, wavFile("tone.wav")));
+    CHECK(p.isDirty());  // a loaded sample is a change
+    const auto target = tempDir().getChildFile("dirty.dwpreset");
+    target.deleteFile();
+    REQUIRE(p.savePreset(target).wasOk());
+    CHECK_FALSE(p.isDirty());
+    setChoice(p, "mode", 1);
+    CHECK(p.isDirty());
+}
+
+TEST_CASE("a loaded preset is clean, even when the parameters round its values", "[processor][dirty]") {
+    JuceRuntime runtime;
+    PresetArchive archive;
+    archive.preset = defaultPreset(3);
+    archive.preset.rollType = RollType::Burst;
+    archive.preset.intensity = 78.34;  // the parameter has steps of 0.1
+    archive.preset.blend = 12.07;
+    const auto written = writePresetArchive(archive);
+    REQUIRE(written.ok());
+    auto file = tempDir().getChildFile("rounded.dwpreset");
+    REQUIRE(file.replaceWithData(written.bytes.data(), written.bytes.size()));
+
+    DubwirbelnProcessor p;
+    setChoice(p, "mode", 1);
+    REQUIRE(p.isDirty());
+    REQUIRE(p.loadPreset(file).wasOk());
+    CHECK_FALSE(p.isDirty());
+}
+
+TEST_CASE("variate makes the preset dirty and undo makes it clean again", "[processor][dirty]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    setChoice(p, "rollType", 1);
+    REQUIRE(p.variate());
+    CHECK(p.isDirty());
+    REQUIRE(p.undoVariate());
+    CHECK(p.isDirty());  // the roll type was chosen after creation, so it still differs from the baseline
+    setChoice(p, "rollType", 0);
+    CHECK_FALSE(p.isDirty());
+}
+
+TEST_CASE("clear asks for confirmation only when the preset is dirty", "[processor][dirty]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor a;
+    setChoice(a, "rollType", 2);
+    setPercent(a, "intensity", 80.0f);
+    const auto target = tempDir().getChildFile("clear.dwpreset");
+    target.deleteFile();
+    REQUIRE(a.savePreset(target).wasOk());
+
+    DubwirbelnProcessor p;
+    REQUIRE(p.loadPreset(target).wasOk());
+    CHECK_FALSE(p.isDirty());
+    CHECK_FALSE(p.needsClearConfirmation());  // an unmodified preset is cleared without a dialog
+
+    setPercent(p, "swing", 10.0f);
+    CHECK(p.needsClearConfirmation());
+
+    p.clearRoll();
+    CHECK(p.isDirty());  // clear marks the preset dirty
+}
+
+TEST_CASE("clearing an empty preset changes nothing", "[processor][dirty]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    p.clearRoll();
+    CHECK_FALSE(p.isDirty());
+}
+
+TEST_CASE("unsaved changes survive the project: dirty stays dirty, clean stays clean", "[processor][dirty]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor a;
+    setChoice(a, "rollType", 3);
+    const auto target = tempDir().getChildFile("project.dwpreset");
+    target.deleteFile();
+    REQUIRE(a.savePreset(target).wasOk());
+    const auto cleanState = stateOf(a);
+    setPercent(a, "blend", 20.0f);
+    REQUIRE(a.isDirty());
+    const auto dirtyState = stateOf(a);
+
+    DubwirbelnProcessor b;
+    b.setStateInformation(cleanState.getData(), static_cast<int>(cleanState.getSize()));
+    CHECK_FALSE(b.isDirty());
+
+    DubwirbelnProcessor c;
+    c.setStateInformation(dirtyState.getData(), static_cast<int>(dirtyState.getSize()));
+    CHECK(c.isDirty());
 }

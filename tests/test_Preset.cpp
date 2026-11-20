@@ -431,3 +431,98 @@ TEST_CASE("out-of-range parameter indices are clamped", "[preset][parameters]") 
     CHECK(p.intensity == Approx(100.0));
     CHECK(p.blend == Approx(0.0));
 }
+
+// ---- presetsEquivalent (dirty tracking) ----
+
+namespace {
+
+Preset richPreset() {
+    Preset p = defaultPreset(4711);
+    p.name = "Rich";
+    p.rollType = RollType::Rush;
+    p.intensity = 78.3;
+    p.blend = 41.7;
+    p.gesture = {{0.0, 0.0}, {0.5, 0.25}, {1.0, 1.0}};
+    p.curveType = CurveType::Ghost;
+    p.curve = curveTemplate(CurveType::Ghost);
+    p.sampleA = SampleSlot{"kick.wav", std::string(64, 'a'), "samples/kick.wav", 2.0, 0.1, 0.9, -3.0};
+    p.sampleB = SampleSlot{"snare.wav", std::string(64, 'b'), "samples/snare.wav", 0.0, 0.0, 1.0, 0.0};
+    p.mode = PlaybackMode::Hold;
+    p.windowBars = 2.0;
+    p.quantize = Quantize::Eighth;
+    p.humanize = 33.3;
+    p.swing = 12.5;
+    p.velocityFollow = VelocityFollow::Velocity;
+    p.variationSeed = 99;
+    p.metadataJson = R"({"tag":"x"})";
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("a preset is equivalent to itself and to a copy", "[preset][dirty]") {
+    const Preset a = richPreset();
+    CHECK(presetsEquivalent(a, a));
+    Preset b = a;
+    CHECK(presetsEquivalent(a, b));
+}
+
+TEST_CASE("float noise from host parameters does not make a preset different", "[preset][dirty]") {
+    const Preset a = richPreset();
+    Preset b = a;
+    b.intensity = static_cast<double>(static_cast<float>(a.intensity));  // 78.30000305
+    b.blend = static_cast<double>(static_cast<float>(a.blend));
+    b.humanize = static_cast<double>(static_cast<float>(a.humanize));
+    b.swing = static_cast<double>(static_cast<float>(a.swing));
+    CHECK(b.intensity != a.intensity);
+    CHECK(presetsEquivalent(a, b));
+    b.curve[3].t += 1e-7;
+    b.sampleA->levelDb += 1e-7;
+    CHECK(presetsEquivalent(a, b));
+}
+
+TEST_CASE("the schema and engine versions are not compared", "[preset][dirty]") {
+    const Preset a = richPreset();
+    Preset b = a;
+    b.engineVersion = "9.9.9";
+    b.schemaVersion = 2;
+    CHECK(presetsEquivalent(a, b));
+}
+
+TEST_CASE("every real change makes a preset different", "[preset][dirty]") {
+    const Preset a = richPreset();
+    const std::pair<const char*, void (*)(Preset&)> changes[] = {
+        {"name", [](Preset& p) { p.name = "Other"; }},
+        {"roll type", [](Preset& p) { p.rollType = RollType::Wave; }},
+        {"no roll", [](Preset& p) { p.rollType.reset(); }},
+        {"intensity", [](Preset& p) { p.intensity += 0.1; }},
+        {"blend", [](Preset& p) { p.blend -= 0.1; }},
+        {"gesture point", [](Preset& p) { p.gesture[1].x = 0.6; }},
+        {"gesture removed", [](Preset& p) { p.gesture.clear(); }},
+        {"curve type", [](Preset& p) { p.curveType = CurveType::Spike; }},
+        {"curve value", [](Preset& p) { p.curve[2].v += 1.0; }},
+        {"curve length", [](Preset& p) { p.curve.pop_back(); }},
+        {"sample A tune", [](Preset& p) { p.sampleA->tuneSemitones = 3.0; }},
+        {"sample A hash", [](Preset& p) { p.sampleA->sha256 = std::string(64, 'c'); }},
+        {"sample A name", [](Preset& p) { p.sampleA->name = "other.wav"; }},
+        {"sample A start", [](Preset& p) { p.sampleA->start = 0.2; }},
+        {"sample B removed", [](Preset& p) { p.sampleB.reset(); }},
+        {"sample B added", [](Preset& p) { p.sampleA.reset(); }},
+        {"mode", [](Preset& p) { p.mode = PlaybackMode::Trigger; }},
+        {"window", [](Preset& p) { p.windowBars = 1.0; }},
+        {"quantize", [](Preset& p) { p.quantize = Quantize::Bar; }},
+        {"humanize", [](Preset& p) { p.humanize = 40.0; }},
+        {"swing", [](Preset& p) { p.swing = 0.0; }},
+        {"velocity follow", [](Preset& p) { p.velocityFollow = VelocityFollow::Off; }},
+        {"variation seed", [](Preset& p) { p.variationSeed = 100; }},
+        {"humanize seed", [](Preset& p) { p.humanizeSeed = 4712; }},
+        {"metadata", [](Preset& p) { p.metadataJson = R"({"tag":"y"})"; }},
+    };
+    for (const auto& [what, change] : changes) {
+        INFO(what);
+        Preset b = a;
+        change(b);
+        CHECK_FALSE(presetsEquivalent(a, b));
+        CHECK_FALSE(presetsEquivalent(b, a));
+    }
+}

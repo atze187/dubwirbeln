@@ -11,6 +11,7 @@
 #include "engine/PluginState.h"
 #include "engine/RollScheduler.h"
 #include "engine/SampleEngine.h"
+#include "engine/TriggerInput.h"
 #include "engine/Variate.h"
 
 namespace dw {
@@ -68,6 +69,19 @@ public:
     bool canRedoVariate() const { return history_.canRedo(); }
     void clearRoll();               // not undoable, drops the variate undo state
 
+    // The trigger note (spec Part 9): default C1, stored in the plugin state, not in the preset.
+    int triggerNote() const { return input_.note(); }
+    void setTriggerNote(int note) { input_.setNote(note); }
+    // MIDI Learn: the next Note-On on any channel becomes the trigger note (it does not start a roll).
+    void startMidiLearn() { input_.startLearn(); }
+    void cancelMidiLearn() { input_.cancelLearn(); }
+    bool isMidiLearning() const { return input_.isLearning(); }
+
+    // Dirty: the preset differs from the one that was last saved or loaded (spec Part 11).
+    // Clear only asks for confirmation when the preset is dirty (spec Part 10).
+    bool isDirty() const;
+    bool needsClearConfirmation() const { return isDirty(); }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     ParameterValues readParameters() const;
@@ -122,9 +136,14 @@ private:
 
     VariateHistory history_;
 
+    // What "dirty" is measured against. Guarded by baselineLock_ (hosts may save the state from any thread).
+    mutable juce::CriticalSection baselineLock_;
+    mutable Preset baseline_;
+    void markClean();  // the current preset becomes the baseline
+
     RollScheduler scheduler_{44100.0};
     SampleEngine engine_{44100.0};
-    std::atomic<int> triggerNote_{kDefaultTriggerNote};
+    TriggerInput input_;  // trigger note and MIDI Learn (lock-free)
     NoteList notes_;     // fixed capacity: processBlock never allocates
     EventList events_;
 

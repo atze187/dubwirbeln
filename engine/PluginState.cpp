@@ -47,6 +47,10 @@ ArchiveWriteResult pluginStateToBytes(const PluginState& state, const FileMap& s
     const std::string instance =
         json{{"stateVersion", kPluginStateVersion}, {"triggerNote", state.triggerNote}}.dump();
     archive.extras["instance.json"] = Bytes(instance.begin(), instance.end());
+    if (state.baseline) {
+        const std::string baseline = presetToJson(*state.baseline);
+        archive.extras["baseline.json"] = Bytes(baseline.begin(), baseline.end());
+    }
     return writePresetArchive(archive);
 }
 
@@ -77,6 +81,11 @@ PluginStateBytesResult pluginStateFromBytes(const Bytes& bytes) {
     PluginState state;
     state.triggerNote = note->get<int>();
     state.preset = std::move(read.archive->preset);
+    // The baseline is optional and only used for dirty tracking: a damaged one is ignored.
+    if (const auto b = read.archive->extras.find("baseline.json"); b != read.archive->extras.end()) {
+        auto parsed = presetFromJson(std::string(b->second.begin(), b->second.end()));
+        if (parsed.preset) state.baseline = std::move(parsed.preset);
+    }
     return {std::move(state), std::move(read.archive->samples), {}};
 }
 

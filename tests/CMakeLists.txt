@@ -1,7 +1,7 @@
 add_executable(dw_tests test_Smoke.cpp test_Rng.cpp test_RollGenerator.cpp test_VelocityCurve.cpp
     test_Expression.cpp test_VelocityFollow.cpp test_RollScheduler.cpp
     test_Preset.cpp test_PluginState.cpp test_SampleEngine.cpp test_Variate.cpp
-    test_FixedVector.cpp test_Realtime.cpp support/AllocGuard.cpp
+    test_TriggerInput.cpp test_FixedVector.cpp test_Realtime.cpp support/AllocGuard.cpp
     test_Sha256.cpp test_PresetArchive.cpp)
 target_link_libraries(dw_tests PRIVATE dw_engine nlohmann_json::nlohmann_json miniz Catch2::Catch2WithMain)
 target_include_directories(dw_tests PRIVATE support)
