@@ -299,6 +299,10 @@ Note: at high tempi 1/64 steps (about 19 ms at 200 BPM) overlap noticeably with 
 - Storage: **plugin state of the instance** (saved with the DAW project). It is **not** part of `.dwpreset` or `.dwbank`, so switching presets or banks never changes the trigger note.
 - v1 scope: trigger note only. CC learn for Intensity, Blend and other parameters is a future topic; until then use host automation.
 
+MIDI Learn details (DECIDED, `engine/TriggerInput`): the Note-On that is learned only sets the trigger note and does not start a roll; the next Note-On of that note does. A Note-Off does not end Learn. Typing a note while Learn is on does not end it. Learn is not saved: a restored state is never in Learn mode. Loading a preset never changes the trigger note. A Note-On with velocity 0 counts as a Note-Off.
+
+Dirty (DECIDED, `presetsEquivalent`): a preset is dirty when it is not equivalent to the one that was last saved or loaded. Equivalent means the same values up to float noise of 1e-4 (host parameters round 78.34 to 78.3), the same samples (by hash) and the same seeds; the schema and engine versions are not compared. Changing a value and changing it back makes the preset clean again. A loaded preset is clean even when the parameters rounded its values. The baseline is saved in the plugin state (`baseline.json`), so a project that was saved with unsaved changes still shows them. Clear asks for confirmation only when the preset is dirty, and a Clear that changes something makes it dirty.
+
 ## Part 10 - Variate and Undo
 
 Variate creates an alternative version of the same roll. The character of the roll stays intact.

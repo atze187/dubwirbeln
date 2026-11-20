@@ -226,6 +226,38 @@ const char* const kRollTypeChoices[] = {nullptr, "build", "drop", "rush", "burst
 
 }  // namespace
 
+namespace {
+
+constexpr double kSameTolerance = 1e-4;  // far below any step a user can set, above float noise
+
+bool same(double a, double b) { return std::fabs(a - b) <= kSameTolerance; }
+
+bool same(const std::optional<SampleSlot>& a, const std::optional<SampleSlot>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    if (!a) return true;
+    return a->name == b->name && a->sha256 == b->sha256 && a->file == b->file &&
+           same(a->tuneSemitones, b->tuneSemitones) && same(a->start, b->start) && same(a->end, b->end) &&
+           same(a->levelDb, b->levelDb);
+}
+
+}  // namespace
+
+bool presetsEquivalent(const Preset& a, const Preset& b) {
+    if (a.name != b.name || a.rollType != b.rollType || a.curveType != b.curveType || a.mode != b.mode ||
+        a.quantize != b.quantize || a.velocityFollow != b.velocityFollow || a.variationSeed != b.variationSeed ||
+        a.humanizeSeed != b.humanizeSeed || a.metadataJson != b.metadataJson)
+        return false;
+    if (!same(a.intensity, b.intensity) || !same(a.blend, b.blend) || !same(a.windowBars, b.windowBars) ||
+        !same(a.humanize, b.humanize) || !same(a.swing, b.swing))
+        return false;
+    if (a.gesture.size() != b.gesture.size() || a.curve.size() != b.curve.size()) return false;
+    for (size_t i = 0; i < a.gesture.size(); ++i)
+        if (!same(a.gesture[i].x, b.gesture[i].x) || !same(a.gesture[i].y, b.gesture[i].y)) return false;
+    for (size_t i = 0; i < a.curve.size(); ++i)
+        if (!same(a.curve[i].t, b.curve[i].t) || !same(a.curve[i].v, b.curve[i].v)) return false;
+    return same(a.sampleA, b.sampleA) && same(a.sampleB, b.sampleB);
+}
+
 Preset defaultPreset(std::uint32_t humanizeSeed) {
     Preset p;
     p.engineVersion = version();

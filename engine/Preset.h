@@ -71,6 +71,11 @@ struct PresetParseResult {
 std::string presetToJson(const Preset& preset);
 PresetParseResult presetFromJson(const std::string& json);
 
+// True when two presets sound and save the same, up to float noise: host parameters make doubles
+// like 78.3 come back as 78.30000305. The schema and engine versions are not compared. This is
+// what "dirty" means: the current preset is not equivalent to the one that was saved or loaded.
+bool presetsEquivalent(const Preset& a, const Preset& b);
+
 // What the roll scheduler needs. A preset without a roll type gives a disabled (silent) config.
 RollConfig toRollConfig(const Preset& preset);
 
