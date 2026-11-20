@@ -1,4 +1,5 @@
-add_library(dw_engine STATIC Version.h Version.cpp Rng.h RollGenerator.h RollGenerator.cpp)
+add_library(dw_engine STATIC Version.h Version.cpp Rng.h RollGenerator.h RollGenerator.cpp
+    VelocityCurve.h VelocityCurve.cpp Expression.h Expression.cpp)
 target_include_directories(dw_engine PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(dw_engine PUBLIC cxx_std_20)
 if(MSVC)

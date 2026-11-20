@@ -38,6 +38,14 @@ std::vector<Phase> planPhases(RollType type, double intensity);
 std::vector<int> phaseBoundaries(const std::vector<Phase>& phases, int referenceUnits);
 std::vector<Sample> blendRow(const std::vector<Sample>& row, double blend);
 std::vector<Trigger> generateRoll(const RollSpec& spec, int barUnits = kUnitsPerBar);
+// The part of the 4-bar reference a window keeps: positions in [begin, end), moved by -shift.
+struct WindowRange {
+    int begin = 0;
+    int end = 0;
+    int shift = 0;
+};
+WindowRange windowRange(RollType type, double windowBars, int barUnits = kUnitsPerBar);
+
 std::vector<Trigger> applyWindow(const std::vector<Trigger>& triggers, RollType type,
                                  double windowBars, int barUnits = kUnitsPerBar);
 
