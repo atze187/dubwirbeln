@@ -282,7 +282,7 @@ TEST_CASE("variate changes the roll values and undo and redo walk the last pass"
     REQUIRE(p.variate());
     const auto varied = p.currentPreset();
     CHECK(varied.variationSeed != 0u);
-    CHECK((varied.intensity != before.intensity || varied.blend != before.blend));
+    CHECK((varied.intensity != before.intensity || varied.blend != before.blend || varied.curve != before.curve));
     CHECK(*varied.rollType == RollType::Build);
     CHECK(varied.mode == before.mode);
     CHECK(p.canUndoVariate());
@@ -366,7 +366,10 @@ TEST_CASE("loading a preset forgets the variate undo state", "[processor][variat
 TEST_CASE("a varied roll still plays", "[processor][variate]") {
     JuceRuntime runtime;
     DubwirbelnProcessor p;
+    // Both slots are loaded: Variate swaps A and B for some triggers (at random), and a trigger of an
+    // empty slot is silent, so with only A loaded the first trigger could land on B and the test flake.
     REQUIRE(p.loadSample(Sample::A, wavFile("tone.wav")));
+    REQUIRE(p.loadSample(Sample::B, wavFile("tone2.wav", 660.0)));
     setChoice(p, "rollType", 1);
     REQUIRE(p.variate());
     CHECK(renderPeak(p, 8) > 0.05f);
