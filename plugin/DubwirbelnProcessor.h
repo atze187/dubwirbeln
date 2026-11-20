@@ -1,10 +1,16 @@
 #pragma once
 
+#include <atomic>
+#include <vector>
+
 #include <juce_audio_processors/juce_audio_processors.h>
+
+#include "engine/RollScheduler.h"
 
 namespace dw {
 
-// Skeleton: a silent monophonic instrument. Roll engine, sample engine and UI follow (see docs/SPEC.md).
+// Monophonic instrument. MIDI and host transport drive the roll scheduler; the sample engine,
+// parameters and UI follow (see docs/SPEC.md), so the output is still silent.
 class DubwirbelnProcessor : public juce::AudioProcessor {
 public:
     DubwirbelnProcessor();
@@ -34,6 +40,10 @@ public:
     void setStateInformation(const void*, int) override;
 
 private:
+    RollScheduler scheduler_{44100.0};
+    std::atomic<int> triggerNote_{36};  // C1, plugin state (spec Part 9)
+    std::vector<NoteEvent> notes_;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DubwirbelnProcessor)
 };
 

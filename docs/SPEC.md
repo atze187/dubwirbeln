@@ -228,6 +228,10 @@ Swing: systematic off-beat timing shift, deterministic (DECIDED): within a phase
 
 Velocity Follow: OFF, VELOCITY, VELOCITY + INTENSITY (default).
 
+Velocity Follow formulas (DECIDED): with VELOCITY and VELOCITY + INTENSITY every trigger velocity (after curve and humanize) is scaled by `played / 127`, rounded half up and clamped to 1..127. With VELOCITY + INTENSITY the roll is also generated with the effective intensity `(played - 1) / 126 * 100`; the stored Intensity of the preset is not changed and applies with OFF and VELOCITY.
+
+Scheduler behaviour (DECIDED, `engine/RollScheduler`): the roll starts on the Note-On sample (or the quantized grid position) with the window already applied, so its first trigger is at the start. Swing and humanize shifts are added to the trigger position; a humanize shift never moves a trigger before the start of the roll. Positions are tracked in 1/64 units, so a tempo change takes effect at the next block (4/4 is assumed; other time signatures are a later topic). In Hold mode the backward phase plays the window's triggers in reverse order at mirrored positions without swing and humanize; the trigger at the window start is not repeated, so the roll ends at the window start.
+
 Monophonic operation: a new roll immediately replaces the current roll.
 
 ### Host sync (TODO-006, DECIDED)
