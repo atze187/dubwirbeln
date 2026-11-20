@@ -8,6 +8,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "engine/GestureRecognizer.h"
 #include "engine/PluginState.h"
 #include "engine/RollScheduler.h"
 #include "engine/SampleEngine.h"
@@ -68,6 +69,14 @@ public:
     bool canUndoVariate() const { return history_.canUndo(); }
     bool canRedoVariate() const { return history_.canRedo(); }
     void clearRoll();               // not undoable, drops the variate undo state
+
+    // The Roll Painter (spec Parts 4 and 5). Coordinates are relative to the drawing area, y up. A gesture
+    // sets only the roll type: above 80 % silently, from 60 to 80 % the best guess with an alternative,
+    // below 60 % nothing changes. The original gesture is kept in the preset.
+    Recognition drawGesture(const Gesture& gesture);
+    // Switches to the alternative of the last gesture; the previous best becomes the alternative.
+    bool chooseGestureAlternative();
+    const Recognition& lastRecognition() const { return lastRecognition_; }
 
     // The trigger note (spec Part 9): default C1, stored in the plugin state, not in the preset.
     int triggerNote() const { return input_.note(); }
@@ -135,6 +144,7 @@ private:
     std::array<std::optional<StoredFile>, 2> storedFiles_;
 
     VariateHistory history_;
+    Recognition lastRecognition_;
 
     // What "dirty" is measured against. Guarded by baselineLock_ (hosts may save the state from any thread).
     mutable juce::CriticalSection baselineLock_;
