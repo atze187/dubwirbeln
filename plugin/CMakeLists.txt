@@ -21,10 +21,13 @@ target_include_directories(Dubwirbeln PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_definitions(Dubwirbeln PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_VST3_CAN_REPLACE_VST2=0)
 target_link_libraries(Dubwirbeln PRIVATE
     dw_engine
     juce::juce_audio_utils
+    juce::juce_audio_formats
+    juce::juce_cryptography
     juce::juce_audio_processors
     juce::juce_gui_basics
     juce::juce_recommended_config_flags

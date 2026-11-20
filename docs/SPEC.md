@@ -268,6 +268,16 @@ RELEASE_MS = 10
 ```
 User-adjustable attack/release is a future topic.
 
+Sample engine details (DECIDED, `engine/SampleEngine`):
+- Fades are linear in dB: the attack rises from -60 dB to 0 dB over 5 ms, the release falls by 60 dB over 10 ms (from the current level, also when it starts during the attack) and then the voice ends.
+- Velocity gain is linear, `velocity / 127`, and the same for A and B. Level is applied in dB on top.
+- Tune changes the playback speed (`2^(semitones / 12)`, +12 = twice as fast, the sample gets shorter), with linear interpolation. A different sample rate of the file is converted the same way.
+- A voice plays from `start` to `end` and ends there without an extra fade. If `end <= start`, the trigger does nothing.
+- A trigger for a slot without a sample does nothing, the running voice keeps playing.
+- A pool of 4 voices covers the retrigger crossfades; if triggers come faster than the release, the voice that has been fading out longest is cut.
+- Mono samples feed both channels, samples with more than two channels use the first two.
+- Import formats: WAV, AIFF, FLAC, MP3 (decoded to memory). Samples are stored as WAV or FLAC in the container; saving them comes with the container step.
+
 Note: at high tempi 1/64 steps (about 19 ms at 200 BPM) overlap noticeably with attack + release; verify audibly.
 
 ## Part 9 - MIDI
