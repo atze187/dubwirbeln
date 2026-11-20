@@ -204,6 +204,8 @@ Assumption (confirm or change): the priority order `P` above. Any fixed, nested,
 
 Flat, Crescendo, Decrescendo, Spike, Inverted Spike, Wave, Ghost.
 
+Template points (DECIDED, `t` over the 4-bar reference, `v` velocity, linear interpolation): Flat 100; Crescendo 40 to 127; Decrescendo 127 to 40; Spike 70, 127 at t = 0.5, 70; Inverted Spike 110, 40 at t = 0.5, 110; Wave 60/120/60/120/60 at t = 0, 0.25, 0.5, 0.75, 1; Ghost 35 with narrow accents of 100 at t = 0, 0.25, 0.5, 0.75 (see `engine/VelocityCurve.cpp`). A trigger's velocity is the curve value at its position over the full reference, so window trimming does not change it.
+
 Each curve type is a **template** (DECIDED). Changing the type regenerates the control points from that type's template; afterwards the points are freely editable. Variate moves only the points, never the type.
 
 ## Part 7 - Playback Engine
@@ -220,7 +222,9 @@ Humanize seed (DECIDED, closes OPEN-7): the preset stores `humanize.seed` (uint3
 
 `humanize.seed` is a **separate field** from `variation.seed`, so pressing Variate does not change the humanization. A new random seed is assigned once when a preset is created (not on every load) and is stored. **Save As keeps the seed**, so a copied preset sounds identical.
 
-Swing: systematic off-beat timing shift, deterministic.
+Humanize amounts (DECIDED): at 100 % the timing deviates by up to +/- 10 ms (uniform, independent of tempo) and the velocity by up to +/- 12, both scaled linearly by the percent value. The two values of trigger `i` are the first two `nextDouble()` outputs of `Rng(humanize.seed, stream = i)`; the velocity is rounded half up and clamped to 1..127.
+
+Swing: systematic off-beat timing shift, deterministic (DECIDED): within a phase every second step of the phase's grid (counted from the start of the reference) is delayed by `swing% * step / 3`, so 100 % gives a triplet feel. The shift depends on the grid level of the trigger's phase.
 
 Velocity Follow: OFF, VELOCITY, VELOCITY + INTENSITY (default).
 

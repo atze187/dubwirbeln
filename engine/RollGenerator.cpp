@@ -171,22 +171,23 @@ std::vector<Trigger> generateRoll(const RollSpec& spec, int barUnits) {
     return triggers;
 }
 
+WindowRange windowRange(RollType type, double windowBars, int barUnits) {
+    const int total = barUnits * kReferenceBars;
+    const int window = std::min(total, roundHalfUp(windowBars * barUnits));
+    const bool keepStart = type == RollType::Drop || type == RollType::Burst;
+    return keepStart ? WindowRange{0, window, 0} : WindowRange{total - window, total, total - window};
+}
+
 std::vector<Trigger> applyWindow(const std::vector<Trigger>& triggers, RollType type, double windowBars,
                                  int barUnits) {
-    const int total = barUnits * kReferenceBars;
-    const int window = roundHalfUp(windowBars * barUnits);
-    if (window >= total) return triggers;
+    const auto range = windowRange(type, windowBars, barUnits);
+    if (range.begin == 0 && range.end >= barUnits * kReferenceBars) return triggers;
 
     std::vector<Trigger> out;
-    const bool keepStart = type == RollType::Drop || type == RollType::Burst;
-    const int offset = total - window;
     for (auto t : triggers) {
-        if (keepStart) {
-            if (t.position < window) out.push_back(t);
-        } else if (t.position >= offset) {
-            t.position -= offset;
-            out.push_back(t);
-        }
+        if (t.position < range.begin || t.position >= range.end) continue;
+        t.position -= range.shift;
+        out.push_back(t);
     }
     return out;
 }
