@@ -392,6 +392,14 @@ preview/               reserved (future)
 
 Compression: samples are stored without additional compression (WAV/FLAC in store mode); JSON uses Deflate.
 
+Container details (DECIDED, `engine/PresetArchive`):
+- Every sample the preset uses must be in the archive under the slot's `file`, and its content must match the slot's `sha256` (checked when writing and when reading; a mismatch rejects the file). Samples the preset does not reference are not written. If both slots use the same file, it is stored once.
+- WAV and FLAC files are stored as they are (the hash is that of the original file). Other formats (AIFF, MP3) are converted to 24-bit FLAC when the sample is loaded, and that FLAC is the stored sample.
+- Two different files with the same name get distinct archive paths when saving (`name_B.ext` for the second).
+- Unknown entries (for example `preview/`) are ignored when reading. Limits when reading: manifest 4 MiB, one sample 512 MiB.
+- A slot whose audio cannot be read when a preset is loaded is dropped.
+- The plugin state is the same archive plus `instance.json` (`stateVersion`, `triggerNote`), so the samples survive the DAW project. States saved as plain JSON by earlier versions are still read.
+
 ## Part 12 - Bank System
 
 Extension: `.dwbank`. ZIP archive (see Part 11 for the shared container rules). Contains presets, samples, previews (reserved), metadata.

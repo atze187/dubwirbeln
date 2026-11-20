@@ -1,5 +1,7 @@
 #include "plugin/DubwirbelnProcessor.h"
 
+#include "engine/Sha256.h"
+
 namespace dw {
 
 namespace {
@@ -152,26 +154,86 @@ void DubwirbelnProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     engine_.process(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples(), events);
 }
 
-bool DubwirbelnProcessor::loadSample(Sample slot, const juce::File& file) {
-    constexpr juce::int64 kMaxFrames = 10'000'000;  // about 3.5 minutes at 48 kHz
-    std::unique_ptr<juce::AudioFormatReader> reader(formats_.createReaderFor(file));
-    if (!reader || reader->lengthInSamples <= 0 || reader->lengthInSamples > kMaxFrames || reader->numChannels == 0)
-        return false;
+namespace {
 
-    const auto frames = static_cast<int>(reader->lengthInSamples);
-    const int channels = static_cast<int>(std::min<unsigned>(reader->numChannels, 2u));
+// Reads a decoded sample (at most two channels) from a reader.
+SamplePtr readSampleData(juce::AudioFormatReader& reader) {
+    constexpr juce::int64 kMaxFrames = 10'000'000;  // about 3.5 minutes at 48 kHz
+    if (reader.lengthInSamples <= 0 || reader.lengthInSamples > kMaxFrames || reader.numChannels == 0) return nullptr;
+
+    const auto frames = static_cast<int>(reader.lengthInSamples);
+    const int channels = static_cast<int>(std::min<unsigned>(reader.numChannels, 2u));
     juce::AudioBuffer<float> buffer(channels, frames);
-    if (!reader->read(&buffer, 0, frames, 0, true, channels > 1)) return false;
+    if (!reader.read(&buffer, 0, frames, 0, true, channels > 1)) return nullptr;
 
     auto data = std::make_shared<SampleData>();
-    data->sampleRate = reader->sampleRate;
+    data->sampleRate = reader.sampleRate;
     data->left.assign(buffer.getReadPointer(0), buffer.getReadPointer(0) + frames);
     if (channels > 1) data->right.assign(buffer.getReadPointer(1), buffer.getReadPointer(1) + frames);
+    return data;
+}
+
+// Encodes a decoded sample as 24-bit FLAC (used for formats the container does not store: AIFF, MP3).
+bool encodeFlac24(const SampleData& data, Bytes& out) {
+    const int channels = data.right.empty() ? 1 : 2;
+    const auto frames = static_cast<int>(data.left.size());
+    juce::AudioBuffer<float> buffer(channels, frames);
+    buffer.copyFrom(0, 0, data.left.data(), frames);
+    if (channels > 1) buffer.copyFrom(1, 0, data.right.data(), frames);
+
+    juce::MemoryBlock block;
+    {
+        juce::FlacAudioFormat flac;
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::MemoryOutputStream>(block, false);
+        auto writer = flac.createWriterFor(stream, juce::AudioFormatWriterOptions{}
+                                                       .withSampleRate(data.sampleRate)
+                                                       .withNumChannels(channels)
+                                                       .withBitsPerSample(24)
+                                                       .withQualityOptionIndex(5));
+        if (!writer) return false;
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, frames)) return false;
+    }  // the writer flushes into `block` when it is destroyed
+    out.assign(static_cast<const std::uint8_t*>(block.getData()),
+               static_cast<const std::uint8_t*>(block.getData()) + block.getSize());
+    return !out.empty();
+}
+
+}  // namespace
+
+SamplePtr DubwirbelnProcessor::decodeSample(const Bytes& bytes) {
+    if (bytes.empty()) return nullptr;
+    std::unique_ptr<juce::InputStream> stream =
+        std::make_unique<juce::MemoryInputStream>(bytes.data(), bytes.size(), false);
+    std::unique_ptr<juce::AudioFormatReader> reader(formats_.createReaderFor(std::move(stream)));
+    return reader ? readSampleData(*reader) : nullptr;
+}
+
+bool DubwirbelnProcessor::loadSample(Sample slot, const juce::File& file) {
+    juce::MemoryBlock raw;
+    if (!file.loadFileAsData(raw) || raw.getSize() == 0) return false;
+
+    // WAV and FLAC are stored as they are; AIFF, MP3 and the rest become 24-bit FLAC.
+    const auto extension = file.getFileExtension().toLowerCase();
+    Bytes bytes;
+    std::string path;
+    if (extension == ".wav" || extension == ".flac") {
+        bytes.assign(static_cast<const std::uint8_t*>(raw.getData()),
+                     static_cast<const std::uint8_t*>(raw.getData()) + raw.getSize());
+        path = "samples/" + file.getFileName().toStdString();
+    } else {
+        std::unique_ptr<juce::AudioFormatReader> reader(formats_.createReaderFor(file));
+        const auto decoded = reader ? readSampleData(*reader) : nullptr;
+        if (!decoded || !encodeFlac24(*decoded, bytes)) return false;
+        path = "samples/" + file.getFileNameWithoutExtension().toStdString() + ".flac";
+    }
+
+    auto data = decodeSample(bytes);  // what a reload of the saved preset will play
+    if (!data) return false;
 
     SampleSlot stored;
     stored.name = file.getFileName().toStdString();
-    stored.sha256 = juce::SHA256(file).toHexString().toStdString();
-    stored.file = "samples/" + file.getFileNameWithoutExtension().toStdString() + ".wav";
+    stored.sha256 = sha256Hex(bytes);
+    stored.file = path;
 
     {
         const juce::SpinLock::ScopedLockType lock(presetLock_);
@@ -188,6 +250,10 @@ bool DubwirbelnProcessor::loadSample(Sample slot, const juce::File& file) {
         // The audio thread has long moved on from samples retired several loads ago.
         if (retiredSamples_.size() > 4) retiredSamples_.erase(retiredSamples_.begin());
         loaded = std::move(data);
+    }
+    {
+        const juce::ScopedLock lock(filesLock_);
+        storedFiles_[slot == Sample::A ? 0 : 1] = StoredFile{path, std::move(bytes)};
     }
     presetRevision_.fetch_add(1);
     return true;
@@ -207,28 +273,101 @@ Preset DubwirbelnProcessor::currentPreset() const {
     return preset;
 }
 
+// The preset as it is saved, with the files of its samples. A slot without sample data cannot be
+// saved and is dropped; two different files with the same name get distinct archive paths.
+Preset DubwirbelnProcessor::presetForSave(FileMap& samples) const {
+    Preset preset = currentPreset();
+    const juce::ScopedLock lock(filesLock_);
+    std::string firstPath;
+    for (int i = 0; i < 2; ++i) {
+        auto& slot = i == 0 ? preset.sampleA : preset.sampleB;
+        const auto& file = storedFiles_[static_cast<size_t>(i)];
+        if (!slot) continue;
+        if (!file) {
+            slot.reset();
+            continue;
+        }
+        std::string path = file->path;
+        if (i == 1 && path == firstPath && samples.at(path) != file->bytes) {
+            const auto dot = path.find_last_of('.');
+            path = path.substr(0, dot) + "_B" + path.substr(dot);
+        }
+        samples[path] = file->bytes;
+        slot->file = path;
+        if (i == 0) firstPath = path;
+    }
+    return preset;
+}
+
+// Replaces the stored preset, its samples and the parameters (message thread).
+void DubwirbelnProcessor::installPreset(Preset preset, const FileMap& files) {
+    std::array<SamplePtr, 2> decoded;
+    std::array<std::optional<StoredFile>, 2> stored;
+    for (int i = 0; i < 2; ++i) {
+        auto& slot = i == 0 ? preset.sampleA : preset.sampleB;
+        if (!slot) continue;
+        const auto it = files.find(slot->file);
+        if (it != files.end()) decoded[static_cast<size_t>(i)] = decodeSample(it->second);
+        if (decoded[static_cast<size_t>(i)]) stored[static_cast<size_t>(i)] = StoredFile{slot->file, it->second};
+        else slot.reset();  // no readable audio for this slot
+    }
+
+    const auto values = toParameterValues(preset);
+    {
+        const juce::SpinLock::ScopedLockType lock(presetLock_);
+        storedPreset_ = std::move(preset);
+        for (size_t i = 0; i < 2; ++i) {
+            if (loadedSamples_[i]) retiredSamples_.push_back(std::move(loadedSamples_[i]));
+            loadedSamples_[i] = std::move(decoded[i]);
+        }
+        if (retiredSamples_.size() > 4) retiredSamples_.erase(retiredSamples_.begin(), retiredSamples_.end() - 4);
+    }
+    {
+        const juce::ScopedLock lock(filesLock_);
+        storedFiles_ = std::move(stored);
+    }
+    writeParameters(values);
+    presetRevision_.fetch_add(1);
+}
+
 void DubwirbelnProcessor::getStateInformation(juce::MemoryBlock& destData) {
     PluginState state;
     state.triggerNote = triggerNote_.load();
-    state.preset = currentPreset();
-    const auto text = pluginStateToJson(state);
-    destData.replaceAll(text.data(), text.size());
+    FileMap samples;
+    state.preset = presetForSave(samples);
+    const auto written = pluginStateToBytes(state, samples);
+    if (!written.ok()) return;
+    destData.replaceAll(written.bytes.data(), written.bytes.size());
 }
 
 void DubwirbelnProcessor::setStateInformation(const void* data, int sizeInBytes) {
     if (data == nullptr || sizeInBytes <= 0) return;
-    const std::string text(static_cast<const char*>(data), static_cast<size_t>(sizeInBytes));
-    auto parsed = pluginStateFromJson(text);
+    const auto* begin = static_cast<const std::uint8_t*>(data);
+    auto parsed = pluginStateFromBytes(Bytes(begin, begin + sizeInBytes));
     if (!parsed.state) return;  // unknown or damaged state: keep what we have
 
-    const auto values = toParameterValues(parsed.state->preset);
     triggerNote_.store(parsed.state->triggerNote);
-    {
-        const juce::SpinLock::ScopedLockType lock(presetLock_);
-        storedPreset_ = std::move(parsed.state->preset);
-    }
-    writeParameters(values);
-    presetRevision_.fetch_add(1);
+    installPreset(std::move(parsed.state->preset), parsed.samples);
+}
+
+juce::Result DubwirbelnProcessor::savePreset(const juce::File& file) const {
+    PresetArchive archive;
+    archive.preset = presetForSave(archive.samples);
+    const auto written = writePresetArchive(archive);
+    if (!written.ok()) return juce::Result::fail(written.error);
+    if (!file.replaceWithData(written.bytes.data(), written.bytes.size()))
+        return juce::Result::fail("cannot write " + file.getFullPathName());
+    return juce::Result::ok();
+}
+
+juce::Result DubwirbelnProcessor::loadPreset(const juce::File& file) {
+    juce::MemoryBlock raw;
+    if (!file.loadFileAsData(raw)) return juce::Result::fail("cannot read " + file.getFullPathName());
+    const auto* begin = static_cast<const std::uint8_t*>(raw.getData());
+    auto read = readPresetArchive(Bytes(begin, begin + raw.getSize()));
+    if (!read.archive) return juce::Result::fail(read.error);
+    installPreset(std::move(read.archive->preset), read.archive->samples);
+    return juce::Result::ok();
 }
 
 }  // namespace dw

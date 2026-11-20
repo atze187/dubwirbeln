@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include "engine/PluginState.h"
+#include "engine/Sha256.h"
 
 using Catch::Approx;
 using nlohmann::json;
@@ -86,4 +87,86 @@ TEST_CASE("broken or unsupported states are rejected", "[state]") {
     bad = doc;
     bad.erase("preset");
     CHECK_FALSE(pluginStateFromJson(bad.dump()).state.has_value());
+}
+
+// ---- binary state (archive) ----
+
+namespace {
+
+Bytes pseudoBytes(size_t n, std::uint32_t seed) {
+    Bytes b(n);
+    std::uint32_t x = seed;
+    for (auto& v : b) {
+        x = x * 1664525u + 1013904223u;
+        v = static_cast<std::uint8_t>(x >> 24);
+    }
+    return b;
+}
+
+}  // namespace
+
+TEST_CASE("the binary state keeps the preset, the trigger note and the samples", "[state][bytes]") {
+    PluginState s = sampleState();
+    const Bytes kick = pseudoBytes(3000, 1);
+    s.preset.sampleA = SampleSlot{"kick.wav", sha256Hex(kick), "samples/kick.wav", 3.0, 0.1, 0.9, -6.0};
+    FileMap files{{"samples/kick.wav", kick}};
+
+    const auto written = pluginStateToBytes(s, files);
+    INFO(written.error);
+    REQUIRE(written.ok());
+
+    const auto r = pluginStateFromBytes(written.bytes);
+    INFO(r.error);
+    REQUIRE(r.state.has_value());
+    CHECK(r.state->triggerNote == 60);
+    CHECK(r.state->preset.name == "State test");
+    REQUIRE(r.state->preset.sampleA.has_value());
+    CHECK(r.state->preset.sampleA->tuneSemitones == Approx(3.0));
+    CHECK(r.samples.size() == 1);
+    CHECK(r.samples.at("samples/kick.wav") == kick);
+}
+
+TEST_CASE("a state without samples round-trips as bytes", "[state][bytes]") {
+    const auto written = pluginStateToBytes(sampleState(), {});
+    REQUIRE(written.ok());
+    const auto r = pluginStateFromBytes(written.bytes);
+    REQUIRE(r.state.has_value());
+    CHECK(r.state->triggerNote == 60);
+    CHECK(r.samples.empty());
+}
+
+TEST_CASE("states saved as plain JSON are still read", "[state][bytes]") {
+    const std::string text = pluginStateToJson(sampleState());
+    const auto r = pluginStateFromBytes(Bytes(text.begin(), text.end()));
+    INFO(r.error);
+    REQUIRE(r.state.has_value());
+    CHECK(r.state->triggerNote == 60);
+    CHECK(r.samples.empty());
+}
+
+TEST_CASE("writing a state fails when a sample is missing", "[state][bytes]") {
+    PluginState s = sampleState();
+    s.preset.sampleA = SampleSlot{"kick.wav", std::string(64, 'a'), "samples/kick.wav", 0, 0, 1, 0};
+    CHECK_FALSE(pluginStateToBytes(s, {}).ok());
+}
+
+TEST_CASE("broken binary states are rejected", "[state][bytes]") {
+    CHECK_FALSE(pluginStateFromBytes({}).state.has_value());
+    CHECK_FALSE(pluginStateFromBytes(pseudoBytes(500, 9)).state.has_value());
+
+    // a plain .dwpreset has no instance.json: it is not a plugin state
+    PresetArchive plain;
+    plain.preset = defaultPreset(1);
+    const auto zip = writePresetArchive(plain);
+    REQUIRE(zip.ok());
+    CHECK_FALSE(pluginStateFromBytes(zip.bytes).state.has_value());
+
+    // instance.json with a bad note
+    PresetArchive bad;
+    bad.preset = defaultPreset(1);
+    const std::string inst = R"({"stateVersion":1,"triggerNote":200})";
+    bad.extras["instance.json"] = Bytes(inst.begin(), inst.end());
+    const auto badZip = writePresetArchive(bad);
+    REQUIRE(badZip.ok());
+    CHECK_FALSE(pluginStateFromBytes(badZip.bytes).state.has_value());
 }
