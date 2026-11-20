@@ -234,6 +234,13 @@ Scheduler behaviour (DECIDED, `engine/RollScheduler`): the roll starts on the No
 
 Monophonic operation: a new roll immediately replaces the current roll.
 
+### Real-time rules (DECIDED)
+
+- The audio thread (`processBlock`) never allocates, locks (it only try-locks) or frees memory. This is checked by tests that count heap allocations during the scheduler, the sample engine and the whole processor (`tests/support/AllocGuard`).
+- The roll is generated on the audio thread at Note-On (or at the quantized start) into fixed-capacity lists; the work is a few hundred triggers. Parameter changes and preset edits are prepared on the message thread and only copied on the audio thread.
+- Limits, beyond which things are dropped: 256 triggers per roll (the most a 4-bar reference at 1/64 holds), 2048 scheduler events and 256 note events per block, 16 velocity curve points (the schema limit), 4 sample voices.
+- Loaded samples are kept alive by the message thread, so the audio thread never releases the last reference to one.
+
 ### Host sync (TODO-006, DECIDED)
 
 - Tempo and time signature come from the host. If the host provides none: 120 BPM, 4/4.

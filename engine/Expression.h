@@ -29,6 +29,12 @@ struct ExpressedTrigger {
     double humanizeMs = 0.0;    // timing shift in milliseconds
 };
 
+using ExpressedList = FixedVector<ExpressedTrigger, kMaxTriggers>;
+
+// Allocation-free variants for the audio thread.
+void expressTriggersInto(const TriggerList& fullRoll, const ExpressionSpec& spec, int barUnits, ExpressedList& out);
+void applyWindowInto(ExpressedList& triggers, RollType type, double windowBars, int barUnits = kUnitsPerBar);
+
 // Velocity (curve + humanize), swing and humanize timing for every trigger of the full roll.
 std::vector<ExpressedTrigger> expressTriggers(const std::vector<Trigger>& fullRoll, const ExpressionSpec& spec,
                                               int barUnits = kUnitsPerBar);

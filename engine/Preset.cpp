@@ -326,4 +326,18 @@ void applyParameterValues(Preset& p, const ParameterValues& v) {
     p.velocityFollow = static_cast<VelocityFollow>(std::clamp(v.velocityFollow, 0, 2));
 }
 
+void applyParameterValues(RollConfig& c, const ParameterValues& v) {
+    const int roll = std::clamp(v.rollType, 0, 5);
+    c.enabled = roll != 0;
+    c.spec.type = roll == 0 ? RollType::Build : static_cast<RollType>(roll - 1);
+    c.spec.intensity = std::clamp(v.intensity, 0.0, 100.0);
+    c.spec.blend = std::clamp(v.blend, 0.0, 100.0);
+    c.expression.humanize = std::clamp(v.humanize, 0.0, 100.0);
+    c.expression.swing = std::clamp(v.swing, 0.0, 100.0);
+    c.playback.windowBars = kWindows[std::clamp(v.window, 0, 3)];
+    c.playback.mode = static_cast<PlaybackMode>(std::clamp(v.mode, 0, 1));
+    c.playback.quantize = static_cast<Quantize>(std::clamp(v.quantize, 0, 4));
+    c.playback.follow = static_cast<VelocityFollow>(std::clamp(v.velocityFollow, 0, 2));
+}
+
 }  // namespace dw

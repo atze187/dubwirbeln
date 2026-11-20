@@ -73,6 +73,7 @@ private:
     ParameterValues readParameters() const;
     void writeParameters(const ParameterValues& values);
     void syncConfig();
+    void rebuildStoredConfig();  // the caller holds presetLock_
     SamplePtr decodeSample(const Bytes& bytes);
     Preset presetForSave(FileMap& samples) const;
     void installPreset(Preset preset, const FileMap& files);
@@ -94,7 +95,14 @@ private:
     // The non-parameter part of the preset. Written on the message thread, read (try-lock) on the audio thread.
     mutable juce::SpinLock presetLock_;
     Preset storedPreset_;
+    // storedPreset_ as the scheduler and the sample engine need it, built on the message thread
+    // (under presetLock_) whenever the stored preset changes, so the audio thread only copies it.
+    RollConfig storedConfig_;
+    std::array<SampleParams, 2> storedSampleParams_;
     std::atomic<int> presetRevision_{1};
+
+    // Audio thread only.
+    RollConfig rtConfig_;  // storedConfig_ with the current parameter values
     int appliedRevision_ = 0;
     ParameterValues appliedValues_;
     bool configApplied_ = false;
@@ -117,7 +125,8 @@ private:
     RollScheduler scheduler_{44100.0};
     SampleEngine engine_{44100.0};
     std::atomic<int> triggerNote_{kDefaultTriggerNote};
-    std::vector<NoteEvent> notes_;
+    NoteList notes_;     // fixed capacity: processBlock never allocates
+    EventList events_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DubwirbelnProcessor)
 };

@@ -5,6 +5,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "AllocGuard.h"
 #include "engine/Sha256.h"
 #include "plugin/DubwirbelnProcessor.h"
 
@@ -369,4 +370,73 @@ TEST_CASE("a varied roll still plays", "[processor][variate]") {
     setChoice(p, "rollType", 1);
     REQUIRE(p.variate());
     CHECK(renderPeak(p, 8) > 0.05f);
+}
+
+// ---- real-time safety ----
+
+TEST_CASE("processBlock does not allocate", "[processor][realtime]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    REQUIRE(p.loadSample(Sample::A, wavFile("kick.wav", 100.0)));
+    REQUIRE(p.loadSample(Sample::B, wavFile("snare.wav", 800.0)));
+    setChoice(p, "rollType", 1);  // Build
+    setChoice(p, "mode", 1);      // Hold
+    p.prepareToPlay(48000.0, 512);
+
+    // set up everything that may allocate: buffers and the first config sync
+    juce::AudioBuffer<float> buffer(2, 512);
+    juce::MidiBuffer midi;
+    buffer.clear();
+    p.processBlock(buffer, midi);
+
+    long allocations = 0;
+    float peak = 0.0f;
+    {
+        dw::test::AllocGuard guard;
+        for (int block = 0; block < 100; ++block) {
+            buffer.clear();
+            midi.clear();
+            if (block == 0 || block == 40) midi.addEvent(juce::MidiMessage::noteOn(1, 36, static_cast<juce::uint8>(100)), 10);
+            if (block == 70) midi.addEvent(juce::MidiMessage::noteOff(1, 36), 20);
+            p.processBlock(buffer, midi);
+            peak = std::max(peak, buffer.getMagnitude(0, 512));
+        }
+        allocations = guard.allocations();
+    }
+    CHECK(allocations == 0);
+    CHECK(peak > 0.05f);
+}
+
+TEST_CASE("parameter changes and preset edits do not make processBlock allocate", "[processor][realtime]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    REQUIRE(p.loadSample(Sample::A, wavFile("kick.wav", 100.0)));
+    setChoice(p, "rollType", 4);  // Burst
+    p.prepareToPlay(48000.0, 512);
+    juce::AudioBuffer<float> buffer(2, 512);
+    juce::MidiBuffer midi;
+    buffer.clear();
+    p.processBlock(buffer, midi);
+
+    // these run on the message thread and may allocate
+    const auto change = [&](int index) {
+        setChoice(p, "quantize", index % 5);
+        setChoice(p, "windowBars", index % 4);
+        if (index % 3 == 0) p.variate();
+        if (index % 5 == 0) p.undoVariate();
+    };
+
+    long allocations = 0;
+    for (int round = 0; round < 12; ++round) {
+        change(round);
+        dw::test::AllocGuard guard;
+        for (int block = 0; block < 6; ++block) {
+            buffer.clear();
+            midi.clear();
+            if (block == 1) midi.addEvent(juce::MidiMessage::noteOn(1, 36, static_cast<juce::uint8>(90)), 0);
+            p.processBlock(buffer, midi);
+        }
+        allocations += guard.allocations();
+    }
+    CHECK(allocations == 0);
 }

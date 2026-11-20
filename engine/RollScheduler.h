@@ -1,9 +1,10 @@
 #pragma once
 
-#include <optional>
+#include <array>
 #include <vector>
 
 #include "engine/Expression.h"
+#include "engine/FixedVector.h"
 #include "engine/RollGenerator.h"
 #include "engine/VelocityFollow.h"
 
@@ -48,45 +49,64 @@ struct SchedulerEvent {
     int velocity = 0;            // Trigger only, 1..127
 };
 
+// Limits of the allocation-free API: what does not fit in a block is dropped.
+constexpr std::size_t kMaxEvents = 2048;
+constexpr std::size_t kMaxNotes = 256;
+constexpr std::size_t kMaxCurvePoints = 16;  // the schema allows 16 points
+using EventList = FixedVector<SchedulerEvent, kMaxEvents>;
+using NoteList = FixedVector<NoteEvent, kMaxNotes>;
+
 // Turns note events and the host transport into sample-accurate triggers (spec Parts 7 and 9).
 // It knows nothing about JUCE and plays no audio.
+//
+// Everything on the audio thread is allocation-free: the roll is generated into fixed-capacity
+// lists at Note-On (or at the quantized start), and setConfig copies into storage that was
+// reserved up front (curves of up to kMaxCurvePoints points).
 class RollScheduler {
 public:
-    explicit RollScheduler(double sampleRate) : sampleRate_(sampleRate) {}
+    explicit RollScheduler(double sampleRate) : sampleRate_(sampleRate) {
+        config_.expression.curve.reserve(kMaxCurvePoints);
+    }
 
     void setSampleRate(double sampleRate) { sampleRate_ = sampleRate; }
     void setConfig(const RollConfig& config) { config_ = config; }
     void reset();
 
     // `notes` must be sorted by sampleOffset. Events come back sorted by sampleOffset.
+    // This overload allocates; it is meant for tests and tools.
     std::vector<SchedulerEvent> process(int numSamples, const std::vector<NoteEvent>& notes,
                                         const Transport& transport);
 
-    bool isRolling() const { return active_.has_value(); }
-    bool isPending() const { return pending_.has_value(); }
+    // The allocation-free variant for the audio thread. Notes and events beyond the limits are dropped.
+    void process(int numSamples, const NoteEvent* notes, int numNotes, const Transport& transport, EventList& out);
+
+    bool isRolling() const { return rolling_; }
+    bool isPending() const { return pending_; }
 
 private:
     static constexpr double kUnitsPerBeat = 16.0;  // 1/64 units per quarter note
 
     struct Active {
-        std::vector<ExpressedTrigger> triggers;  // windowed, velocities already followed
-        std::vector<char> fired;
+        ExpressedList triggers;                      // windowed, velocities already followed
+        std::array<char, kMaxTriggers> fired{};
         double length = 0.0;  // window length in units
         double pos = 0.0;     // units since the roll started
         bool reverse = false;
     };
-    struct Pending {
-        double targetBeat = 0.0;
-        int velocity = 100;
-    };
 
     void startRoll(int playedVelocity);
-    void advanceActive(double& cursor, double target, double bpm, std::vector<SchedulerEvent>& out);
+    void advanceActive(double& cursor, double target, double bpm, EventList& out);
 
     double sampleRate_;
     RollConfig config_;
-    std::optional<Active> active_;
-    std::optional<Pending> pending_;
+
+    Active active_;
+    bool rolling_ = false;
+    TriggerList scratch_;  // the full roll while it is generated
+
+    bool pending_ = false;
+    double pendingTargetBeat_ = 0.0;
+    int pendingVelocity_ = 100;
 };
 
 }  // namespace dw

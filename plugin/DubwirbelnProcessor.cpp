@@ -52,7 +52,11 @@ DubwirbelnProcessor::DubwirbelnProcessor()
 
     // The humanize seed is assigned once, when the instance is created, and then stored (spec Part 7).
     storedPreset_ = defaultPreset(static_cast<std::uint32_t>(juce::Random::getSystemRandom().nextInt64()));
-    notes_.reserve(256);
+    {
+        const juce::SpinLock::ScopedLockType lock(presetLock_);
+        rebuildStoredConfig();
+    }
+    rtConfig_.expression.curve.reserve(kMaxCurvePoints);  // the audio thread copies into this: no allocation
     formats_.registerBasicFormats();
 }
 
@@ -96,26 +100,37 @@ void DubwirbelnProcessor::writeParameters(const ParameterValues& v) {
     set("velocityFollow", static_cast<float>(v.velocityFollow));
 }
 
-// Rebuilds the scheduler config when a parameter or the stored preset part changed.
+// Message thread, with presetLock_ held: builds what the audio thread needs from storedPreset_.
+void DubwirbelnProcessor::rebuildStoredConfig() {
+    storedConfig_ = toRollConfig(storedPreset_);
+    for (size_t i = 0; i < 2; ++i) {
+        const auto& slot = i == 0 ? storedPreset_.sampleA : storedPreset_.sampleB;
+        storedSampleParams_[i] = slot ? SampleParams{slot->tuneSemitones, slot->start, slot->end, slot->levelDb}
+                                      : SampleParams{};
+    }
+}
+
+// Audio thread, no allocation: takes over the stored preset part when it changed and applies the
+// current parameter values (host automation) on top of it.
 void DubwirbelnProcessor::syncConfig() {
     const auto values = readParameters();
     const int revision = presetRevision_.load();
-    if (configApplied_ && revision == appliedRevision_ && values == appliedValues_) return;
+    const bool storedChanged = !configApplied_ || revision != appliedRevision_;
+    if (!storedChanged && values == appliedValues_) return;
 
-    const juce::SpinLock::ScopedTryLockType lock(presetLock_);
-    if (!lock.isLocked()) return;  // the message thread is writing: try again in the next block
-
-    Preset preset = storedPreset_;
-    applyParameterValues(preset, values);
-    scheduler_.setConfig(toRollConfig(preset));
-    for (const auto slot : {Sample::A, Sample::B}) {
-        const auto& stored = slot == Sample::A ? preset.sampleA : preset.sampleB;
-        SampleParams params;
-        if (stored) params = {stored->tuneSemitones, stored->start, stored->end, stored->levelDb};
-        engine_.setSample(slot, loadedSamples_[slot == Sample::A ? 0 : 1], params);
+    if (storedChanged) {
+        const juce::SpinLock::ScopedTryLockType lock(presetLock_);
+        if (!lock.isLocked()) return;  // the message thread is writing: try again in the next block
+        rtConfig_ = storedConfig_;     // copies into the curve capacity reserved in the constructor
+        for (const auto slot : {Sample::A, Sample::B}) {
+            const size_t i = slot == Sample::A ? 0 : 1;
+            engine_.setSample(slot, loadedSamples_[i], storedSampleParams_[i]);
+        }
+        appliedRevision_ = revision;
     }
+    applyParameterValues(rtConfig_, values);
+    scheduler_.setConfig(rtConfig_);
     appliedValues_ = values;
-    appliedRevision_ = revision;
     configApplied_ = true;
 }
 
@@ -146,12 +161,13 @@ void DubwirbelnProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         }
     }
 
-    const auto events = scheduler_.process(buffer.getNumSamples(), notes_, transport);
+    scheduler_.process(buffer.getNumSamples(), notes_.data(), static_cast<int>(notes_.size()), transport, events_);
     if (buffer.getNumChannels() < 2) {
         buffer.clear();
         return;
     }
-    engine_.process(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples(), events);
+    engine_.process(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples(), events_.data(),
+                    static_cast<int>(events_.size()));
 }
 
 namespace {
@@ -245,6 +261,7 @@ bool DubwirbelnProcessor::loadSample(Sample slot, const juce::File& file) {
             stored.levelDb = target->levelDb;
         }
         target = stored;
+        rebuildStoredConfig();
         auto& loaded = loadedSamples_[slot == Sample::A ? 0 : 1];
         if (loaded) retiredSamples_.push_back(std::move(loaded));
         // The audio thread has long moved on from samples retired several loads ago.
@@ -316,6 +333,7 @@ void DubwirbelnProcessor::installPreset(Preset preset, const FileMap& files) {
     {
         const juce::SpinLock::ScopedLockType lock(presetLock_);
         storedPreset_ = std::move(preset);
+        rebuildStoredConfig();
         for (size_t i = 0; i < 2; ++i) {
             if (loadedSamples_[i]) retiredSamples_.push_back(std::move(loadedSamples_[i]));
             loadedSamples_[i] = std::move(decoded[i]);
@@ -339,6 +357,7 @@ void DubwirbelnProcessor::applyEditedPreset(const Preset& preset) {
         storedPreset_.gesture = preset.gesture;
         storedPreset_.curve = preset.curve;
         storedPreset_.variationSeed = preset.variationSeed;
+        rebuildStoredConfig();
     }
     writeParameters(values);
     presetRevision_.fetch_add(1);

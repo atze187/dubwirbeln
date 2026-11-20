@@ -1,9 +1,9 @@
 #include "engine/RollGenerator.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
-#include <numeric>
 
 #include "engine/Rng.h"
 
@@ -25,8 +25,14 @@ int roundHalfUp(double x) { return static_cast<int>(std::floor(x + 0.5 + kEps));
 // Units (1/64 notes) between two triggers of a grid level: 1/8 -> 8, 1/16 -> 4, 1/32 -> 2, 1/64 -> 1.
 int stepUnits(int grid) { return 64 / grid; }
 
-std::vector<Sample> parseRow(const char* s) {
-    std::vector<Sample> row;
+// The pieces of a roll are tiny (a row has at most 5 steps, a roll at most 8 phases), so the internals
+// use fixed-capacity containers and never touch the heap: generateRollInto runs on the audio thread.
+using SampleRow = FixedVector<Sample, 8>;
+using IntList = FixedVector<int, 8>;
+using BoundList = FixedVector<int, kMaxPhases + 1>;
+
+SampleRow parseRow(const char* s) {
+    SampleRow row;
     for (; *s; ++s) row.push_back(*s == 'B' ? Sample::B : Sample::A);
     return row;
 }
@@ -35,7 +41,7 @@ bool usesSingleRow(RollType type) { return type == RollType::Burst || type == Ro
 
 // Sample DNA rows by grid level (spec Part 6). DROP uses the same rows as BUILD, because its
 // phases run from dense to sparse and each row belongs to a grid level, not to a phase index.
-std::vector<Sample> dnaRow(RollType type, int grid) {
+SampleRow dnaRow(RollType type, int grid) {
     switch (type) {
         case RollType::Build:
         case RollType::Drop:
@@ -59,128 +65,32 @@ std::vector<Sample> dnaRow(RollType type, int grid) {
 
 // Priority order P for blending: weak positions first (odd indices, then 2, 4, ...; index 0 last),
 // ties to the higher index. For n = 4 this is 3, 1, 2, 0.
-std::vector<int> priorityOrder(int n) {
+IntList priorityOrder(int n) {
     auto weakness = [](int i) { return i == 0 ? 1000 : std::countr_zero(static_cast<unsigned>(i)); };
-    std::vector<int> order(static_cast<size_t>(n));
-    std::iota(order.begin(), order.end(), 0);
-    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+    auto before = [&](int a, int b) {
         const int wa = weakness(a), wb = weakness(b);
         return wa != wb ? wa < wb : a > b;
-    });
+    };
+    IntList order;
+    for (int i = 0; i < n; ++i) order.push_back(i);
+    for (size_t i = 1; i < order.size(); ++i) {  // insertion sort: stable and allocation-free
+        const int value = order[i];
+        size_t j = i;
+        for (; j > 0 && before(value, order[j - 1]); --j) order[j] = order[j - 1];
+        order[j] = value;
+    }
     return order;
 }
 
-}  // namespace
-
-double holdShare(double intensity) {
-    return intensity >= 50.0 ? 0.10 + 0.006 * (intensity - 50.0) : 0.02 + 0.0016 * intensity;
-}
-
-double burstShare(double intensity) { return 0.25 + 0.0075 * intensity; }
-
-namespace {
-
-// Shifts the shares of the phases that are not held by up to 15 % each and scales them back so
-// that their sum, and so the hold time, stays as it was.
-void jitterShares(std::vector<Phase>& phases, std::uint32_t seed) {
-    Rng rng(static_cast<std::uint64_t>(seed), kDensityStream);
-    double before = 0.0, after = 0.0;
-    std::vector<double> moved(phases.size(), 0.0);
-    for (size_t i = 0; i < phases.size(); ++i) {
-        if (phases[i].hold) continue;
-        moved[i] = phases[i].share * (1.0 + kDensityVariation * (2.0 * rng.nextDouble() - 1.0));
-        before += phases[i].share;
-        after += moved[i];
-    }
-    if (after <= 0.0) return;
-    for (size_t i = 0; i < phases.size(); ++i)
-        if (!phases[i].hold) phases[i].share = moved[i] * (before / after);
-}
-
-}  // namespace
-
-std::vector<Phase> planPhases(RollType type, double intensity, std::uint32_t variationSeed) {
-    if (type == RollType::Burst) return {{64, burstShare(intensity), false}};
-
-    std::vector<Phase> phases;
-    if (type == RollType::Wave) {
-        const int fast = intensity >= 50.0 ? 64 : 32;
-        phases = {{16, 0.25, false}, {fast, 0.25, false}, {16, 0.25, false}, {fast, 0.25, false}};
-        if (variationSeed != 0) jitterShares(phases, variationSeed);
-        return phases;
-    }
-
-    std::vector<int> grids;
-    switch (type) {
-        case RollType::Build:
-        case RollType::Drop:
-            if (intensity < 25.0) grids = {8, 16};
-            else if (intensity < 50.0) grids = {8, 16, 32};
-            else grids = {8, 16, 32, 64};
-            break;
-        default:  // Rush
-            grids = intensity < 50.0 ? std::vector<int>{8, 8, 8, 32} : std::vector<int>{8, 8, 8, 32, 64};
-            break;
-    }
-    if (type == RollType::Drop) std::reverse(grids.begin(), grids.end());
-
-    const size_t peak = type == RollType::Drop ? 0 : grids.size() - 1;
-    const double hold = holdShare(intensity);
-    const double rest = (1.0 - hold) / static_cast<double>(grids.size() - 1);
-
-    for (size_t i = 0; i < grids.size(); ++i) phases.push_back({grids[i], i == peak ? hold : rest, i == peak});
-    if (variationSeed != 0) jitterShares(phases, variationSeed);
-    return phases;
-}
-
-void varySamples(std::vector<Trigger>& triggers, std::uint32_t variationSeed) {
-    if (variationSeed == 0 || triggers.empty()) return;
-    Rng rng(static_cast<std::uint64_t>(variationSeed), kSampleStream);
-    const double strength = kSampleVariation * rng.nextDouble();
-
-    // Every run of triggers on the same grid level swaps its own share of A and B.
-    size_t begin = 0;
-    while (begin < triggers.size()) {
-        size_t end = begin;
-        while (end < triggers.size() && triggers[end].grid == triggers[begin].grid) ++end;
-        const auto n = static_cast<std::uint32_t>(end - begin);
-        const auto flips = static_cast<std::uint32_t>(roundHalfUp(strength * n));
-
-        std::vector<std::uint32_t> order(n);
-        std::iota(order.begin(), order.end(), 0u);
-        for (std::uint32_t k = 0; k < flips && k < n; ++k) {  // partial Fisher-Yates: distinct triggers
-            std::swap(order[k], order[k + rng.nextBelow(n - k)]);
-            auto& s = triggers[begin + order[k]].sample;
-            s = s == Sample::A ? Sample::B : Sample::A;
-        }
-        begin = end;
-    }
-}
-
-std::vector<int> phaseBoundaries(const std::vector<Phase>& phases, int referenceUnits) {
-    std::vector<int> bounds{0};
-    double cumulative = 0.0;
-    for (size_t i = 0; i < phases.size(); ++i) {
-        cumulative += phases[i].share;
-        const double raw = cumulative * referenceUnits;
-        if (i + 1 == phases.size()) {
-            bounds.push_back(roundHalfUp(raw));
-        } else {
-            // Snap to a multiple of the coarser neighbouring step so both phases stay on the grid.
-            const int m = std::max(stepUnits(phases[i].grid), stepUnits(phases[i + 1].grid));
-            bounds.push_back(std::max(bounds.back(), roundHalfUp(raw / m) * m));
-        }
-    }
-    return bounds;
-}
-
-std::vector<Sample> blendRow(const std::vector<Sample>& row, double blend) {
+// Blends one row into `out` (spec Part 6, see blendRow).
+void blendRowInto(const SampleRow& row, double blend, SampleRow& out) {
     const int n = static_cast<int>(row.size());
     const int k = static_cast<int>(std::count(row.begin(), row.end(), Sample::B));
     const double b = std::clamp(blend, 0.0, 100.0);
     const auto order = priorityOrder(n);
 
-    std::vector<Sample> out(row.size(), Sample::A);
+    out.clear();
+    out.resize(row.size(), Sample::A);
     if (b <= 50.0) {
         // Keep the first `keep` original B positions in priority order.
         int keep = roundHalfUp(k * b / 50.0);
@@ -203,19 +113,150 @@ std::vector<Sample> blendRow(const std::vector<Sample>& row, double blend) {
             }
         }
     }
-    return out;
 }
 
-std::vector<Trigger> generateRoll(const RollSpec& spec, int barUnits) {
-    const int total = barUnits * kReferenceBars;
-    const auto phases = planPhases(spec.type, spec.intensity, spec.variationSeed);
-    const auto bounds = phaseBoundaries(phases, total);
+// Shifts the shares of the phases that are not held by up to 15 % each and scales them back so
+// that their sum, and so the hold time, stays as it was.
+void jitterShares(PhaseList& phases, std::uint32_t seed) {
+    Rng rng(static_cast<std::uint64_t>(seed), kDensityStream);
+    double before = 0.0, after = 0.0;
+    std::array<double, kMaxPhases> moved{};
+    for (size_t i = 0; i < phases.size(); ++i) {
+        if (phases[i].hold) continue;
+        moved[i] = phases[i].share * (1.0 + kDensityVariation * (2.0 * rng.nextDouble() - 1.0));
+        before += phases[i].share;
+        after += moved[i];
+    }
+    if (after <= 0.0) return;
+    for (size_t i = 0; i < phases.size(); ++i)
+        if (!phases[i].hold) phases[i].share = moved[i] * (before / after);
+}
 
-    std::vector<Trigger> triggers;
+// Cumulative phase boundaries in units, snapped to the grid (see phaseBoundaries).
+void phaseBoundariesInto(const PhaseList& phases, int referenceUnits, BoundList& bounds) {
+    bounds.clear();
+    bounds.push_back(0);
+    double cumulative = 0.0;
+    for (size_t i = 0; i < phases.size(); ++i) {
+        cumulative += phases[i].share;
+        const double raw = cumulative * referenceUnits;
+        if (i + 1 == phases.size()) {
+            bounds.push_back(roundHalfUp(raw));
+        } else {
+            // Snap to a multiple of the coarser neighbouring step so both phases stay on the grid.
+            const int m = std::max(stepUnits(phases[i].grid), stepUnits(phases[i + 1].grid));
+            bounds.push_back(std::max(bounds.back(), roundHalfUp(raw / m) * m));
+        }
+    }
+}
+
+// A run of one grid level holds at most kMaxTriggers triggers; a roll never has more.
+void varySamplesImpl(Trigger* triggers, size_t count, std::uint32_t variationSeed) {
+    if (variationSeed == 0 || count == 0) return;
+    Rng rng(static_cast<std::uint64_t>(variationSeed), kSampleStream);
+    const double strength = kSampleVariation * rng.nextDouble();
+
+    // Every run of triggers on the same grid level swaps its own share of A and B.
+    size_t begin = 0;
+    while (begin < count) {
+        size_t end = begin;
+        while (end < count && triggers[end].grid == triggers[begin].grid) ++end;
+        const auto n = static_cast<std::uint32_t>(std::min(end - begin, kMaxTriggers));
+        const auto flips = static_cast<std::uint32_t>(roundHalfUp(strength * n));
+
+        std::array<std::uint32_t, kMaxTriggers> order;
+        for (std::uint32_t i = 0; i < n; ++i) order[i] = i;
+        for (std::uint32_t k = 0; k < flips && k < n; ++k) {  // partial Fisher-Yates: distinct triggers
+            std::swap(order[k], order[k + rng.nextBelow(n - k)]);
+            auto& s = triggers[begin + order[k]].sample;
+            s = s == Sample::A ? Sample::B : Sample::A;
+        }
+        begin = end;
+    }
+}
+
+}  // namespace
+
+double holdShare(double intensity) {
+    return intensity >= 50.0 ? 0.10 + 0.006 * (intensity - 50.0) : 0.02 + 0.0016 * intensity;
+}
+
+double burstShare(double intensity) { return 0.25 + 0.0075 * intensity; }
+
+void planPhasesInto(RollType type, double intensity, std::uint32_t variationSeed, PhaseList& phases) {
+    phases.clear();
+    if (type == RollType::Burst) {
+        phases.push_back({64, burstShare(intensity), false});
+        return;
+    }
+    if (type == RollType::Wave) {
+        const int fast = intensity >= 50.0 ? 64 : 32;
+        for (int grid : {16, fast, 16, fast}) phases.push_back({grid, 0.25, false});
+        if (variationSeed != 0) jitterShares(phases, variationSeed);
+        return;
+    }
+
+    IntList grids;
+    switch (type) {
+        case RollType::Build:
+        case RollType::Drop:
+            if (intensity < 25.0) grids = {8, 16};
+            else if (intensity < 50.0) grids = {8, 16, 32};
+            else grids = {8, 16, 32, 64};
+            break;
+        default:  // Rush
+            grids = intensity < 50.0 ? IntList{8, 8, 8, 32} : IntList{8, 8, 8, 32, 64};
+            break;
+    }
+    if (type == RollType::Drop) std::reverse(grids.begin(), grids.end());
+
+    const size_t peak = type == RollType::Drop ? 0 : grids.size() - 1;
+    const double hold = holdShare(intensity);
+    const double rest = (1.0 - hold) / static_cast<double>(grids.size() - 1);
+
+    for (size_t i = 0; i < grids.size(); ++i) phases.push_back({grids[i], i == peak ? hold : rest, i == peak});
+    if (variationSeed != 0) jitterShares(phases, variationSeed);
+}
+
+std::vector<Phase> planPhases(RollType type, double intensity, std::uint32_t variationSeed) {
+    PhaseList phases;
+    planPhasesInto(type, intensity, variationSeed, phases);
+    return std::vector<Phase>(phases.begin(), phases.end());
+}
+
+void varySamples(std::vector<Trigger>& triggers, std::uint32_t variationSeed) {
+    varySamplesImpl(triggers.data(), triggers.size(), variationSeed);
+}
+
+std::vector<int> phaseBoundaries(const std::vector<Phase>& phases, int referenceUnits) {
+    PhaseList list;
+    for (const auto& p : phases) list.push_back(p);
+    BoundList bounds;
+    phaseBoundariesInto(list, referenceUnits, bounds);
+    return std::vector<int>(bounds.begin(), bounds.end());
+}
+
+std::vector<Sample> blendRow(const std::vector<Sample>& row, double blend) {
+    SampleRow in;
+    for (Sample s : row) in.push_back(s);
+    SampleRow out;
+    blendRowInto(in, blend, out);
+    return std::vector<Sample>(out.begin(), out.end());
+}
+
+void generateRollInto(const RollSpec& spec, int barUnits, TriggerList& triggers) {
+    const int total = barUnits * kReferenceBars;
+    PhaseList phases;
+    planPhasesInto(spec.type, spec.intensity, spec.variationSeed, phases);
+    BoundList bounds;
+    phaseBoundariesInto(phases, total, bounds);
+
+    triggers.clear();
     size_t globalIndex = 0;  // used by single-row types (BURST, WAVE): the row runs through all phases
     for (size_t p = 0; p < phases.size(); ++p) {
         const int step = stepUnits(phases[p].grid);
-        const auto row = blendRow(dnaRow(spec.type, phases[p].grid), spec.blend);
+        SampleRow row;
+        blendRowInto(dnaRow(spec.type, phases[p].grid), spec.blend, row);
         size_t phaseIndex = 0;  // other types restart their row at every phase
         for (int pos = bounds[p]; pos < bounds[p + 1]; pos += step) {
             const size_t i = usesSingleRow(spec.type) ? globalIndex : phaseIndex;
@@ -224,8 +265,13 @@ std::vector<Trigger> generateRoll(const RollSpec& spec, int barUnits) {
             ++phaseIndex;
         }
     }
-    varySamples(triggers, spec.variationSeed);
-    return triggers;
+    varySamplesImpl(triggers.data(), triggers.size(), spec.variationSeed);
+}
+
+std::vector<Trigger> generateRoll(const RollSpec& spec, int barUnits) {
+    TriggerList triggers;
+    generateRollInto(spec, barUnits, triggers);
+    return std::vector<Trigger>(triggers.begin(), triggers.end());
 }
 
 WindowRange windowRange(RollType type, double windowBars, int barUnits) {
@@ -247,6 +293,20 @@ std::vector<Trigger> applyWindow(const std::vector<Trigger>& triggers, RollType 
         out.push_back(t);
     }
     return out;
+}
+
+void applyWindowInto(TriggerList& triggers, RollType type, double windowBars, int barUnits) {
+    const auto range = windowRange(type, windowBars, barUnits);
+    if (range.begin == 0 && range.end >= barUnits * kReferenceBars) return;
+
+    size_t kept = 0;
+    for (size_t i = 0; i < triggers.size(); ++i) {
+        Trigger t = triggers[i];
+        if (t.position < range.begin || t.position >= range.end) continue;
+        t.position -= range.shift;
+        triggers[kept++] = t;
+    }
+    triggers.truncate(kept);
 }
 
 }  // namespace dw
