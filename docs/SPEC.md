@@ -83,6 +83,19 @@ Confidence (DECIDED feedback behavior):
 - **60-80 %**: apply the best guess immediately. The status bar shows e.g. `BUILD 72 % - alternative: WAVE 61 %`; the alternative is clickable and switches the roll type.
 - **< 60 %**: reject. Status bar message asks the user to redraw. The current roll stays unchanged.
 
+**Recognition details (DECIDED, `engine/GestureRecognizer`):**
+- Input: strokes (pen down to pen up) of points relative to the drawing area (0..1), **y pointing up** (`/` rises). Dots are several very small strokes. A gesture smaller than 2 % of the drawing area is a click and ignored. The preset stores the original gesture as a flat list (normalized, strokes joined, at most 512 points); stroke boundaries are not stored.
+- Normalization: move to the origin and scale both axes by the same factor (longer side = 1), so a flat line stays flat. The outline is resampled to 64 points evenly along its length and smoothed (moving average of 5). It is read left to right, whatever the drawing direction: `/` is BUILD from the bottom or from the top.
+- Direction changes are counted with a zigzag: a rise or fall counts only when it is **larger than 10 %** of the gesture size (exactly 10 % does not, so it counts as BUILD/DROP, as suggested above).
+- Each roll type gets a confidence from 0 to 100 %:
+  - BUILD / DROP: no direction change, and the line rises (BUILD) or falls (DROP) by at least 30 % of the size (below 10 % it is flat, in between it counts partly); multiplied by how straight the line is (largest distance from the chord: up to 5 % of the chord length counts fully, from 20 % not at all).
+  - RUSH: rises with no direction change, and is low at half the width: the height there, in parts of the rise, is 15 % or less for full confidence and 45 % or more for none.
+  - WAVE: two or more direction changes, 85 % with two and 100 % with three or more, reduced down to 60 % when the smallest inner swing is only just above 10 %. Exactly one clear direction change (`/\`) gives only 35 %, so it is rejected.
+  - BURST: at least 3 strokes that are all smaller than 15 % of the gesture (2 strokes give 50 %, mixed with big strokes less). Dots are dots even when they lie on a line.
+  - All outline types are multiplied by how much the gesture travels from left to right, so circles and scribbles do not become WAVE.
+- The best guess is applied from 60 % (above 80 % silently, up to 80 % with the alternative); the second guess is offered when it reaches 35 %. Choosing the alternative swaps the two, so it can be switched back.
+- A rejected gesture leaves the roll type and the stored gesture as they were.
+
 **Gesture scope (DECIDED, closes OPEN-8):** a gesture sets **only the Roll Type**. Intensity and Blend stay unchanged and are set with their controls. Gesture length, steepness and speed do not influence any parameter.
 
 ## Part 6 - Roll Engine

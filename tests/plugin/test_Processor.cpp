@@ -652,3 +652,153 @@ TEST_CASE("unsaved changes survive the project: dirty stays dirty, clean stays c
     c.setStateInformation(dirtyState.getData(), static_cast<int>(dirtyState.getSize()));
     CHECK(c.isDirty());
 }
+
+// ---- the Roll Painter: gestures (spec Parts 4 and 5) ----
+
+namespace {
+
+Stroke gestureLine(double x0, double y0, double x1, double y1, int n = 40) {
+    Stroke s;
+    for (int i = 0; i < n; ++i) {
+        const double t = static_cast<double>(i) / (n - 1);
+        s.push_back({x0 + (x1 - x0) * t, y0 + (y1 - y0) * t});
+    }
+    return s;
+}
+
+Gesture bentRamp() {  // BUILD with about 70 %, RUSH as the alternative
+    Stroke s = gestureLine(0.0, 0.0, 0.5, 0.3, 25);
+    const Stroke t = gestureLine(0.5, 0.3, 1.0, 1.0, 25);
+    s.insert(s.end(), t.begin() + 1, t.end());
+    return {s};
+}
+
+Gesture dots() {
+    return {{{0.1, 0.5}, {0.11, 0.5}}, {{0.4, 0.5}, {0.41, 0.5}}, {{0.7, 0.5}, {0.71, 0.5}}, {{0.95, 0.5}, {0.96, 0.5}}};
+}
+
+}  // namespace
+
+TEST_CASE("a clear gesture sets the roll type and is stored", "[processor][gesture]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    setPercent(p, "intensity", 63.0f);
+    setPercent(p, "blend", 22.0f);
+    const auto before = p.currentPreset();
+
+    const auto r = p.drawGesture({gestureLine(0.1, 0.1, 0.9, 0.9)});
+    CHECK(r.decision == GestureDecision::Apply);
+
+    const auto preset = p.currentPreset();
+    REQUIRE(preset.rollType.has_value());
+    CHECK(*preset.rollType == RollType::Build);
+    CHECK(preset.intensity == before.intensity);  // a gesture sets only the roll type
+    CHECK(preset.blend == before.blend);
+    CHECK(preset.gesture.size() >= 2);
+    CHECK(preset.gesture.size() <= 512);
+    for (const auto& pt : preset.gesture) {
+        CHECK(pt.x >= 0.0);
+        CHECK(pt.x <= 1.0);
+        CHECK(pt.y >= 0.0);
+        CHECK(pt.y <= 1.0);
+    }
+    CHECK(p.isDirty());
+}
+
+TEST_CASE("every gesture of the spec reaches its roll type", "[processor][gesture]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    struct Case {
+        Gesture gesture;
+        RollType expected;
+    };
+    Stroke rush = gestureLine(0.0, 0.1, 0.7, 0.1, 30);
+    const Stroke rise = gestureLine(0.7, 0.1, 1.0, 0.5, 15);
+    rush.insert(rush.end(), rise.begin() + 1, rise.end());
+    Stroke wave;
+    for (int i = 0; i < 200; ++i) {
+        const double t = i / 199.0;
+        wave.push_back({t, 0.5 + 0.25 * std::sin(2.0 * 3.14159265358979 * 3.0 * t)});
+    }
+    const Case cases[] = {{{gestureLine(0.1, 0.1, 0.9, 0.9)}, RollType::Build},
+                          {{gestureLine(0.1, 0.9, 0.9, 0.1)}, RollType::Drop},
+                          {{rush}, RollType::Rush},
+                          {dots(), RollType::Burst},
+                          {{wave}, RollType::Wave}};
+    for (const auto& c : cases) {
+        INFO("expected roll type " << static_cast<int>(c.expected));
+        p.drawGesture(c.gesture);
+        REQUIRE(p.currentPreset().rollType.has_value());
+        CHECK(*p.currentPreset().rollType == c.expected);
+    }
+}
+
+TEST_CASE("an unclear gesture changes nothing", "[processor][gesture]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    REQUIRE(p.drawGesture({gestureLine(0.1, 0.1, 0.9, 0.9)}).decision == GestureDecision::Apply);
+    const auto before = p.currentPreset();
+
+    const auto r = p.drawGesture({gestureLine(0.0, 0.5, 1.0, 0.5)});  // a flat line is nothing
+    CHECK(r.decision == GestureDecision::Reject);
+    const auto after = p.currentPreset();
+    CHECK(*after.rollType == RollType::Build);
+    CHECK(after.gesture.size() == before.gesture.size());  // the old gesture stays
+    CHECK(presetsEquivalent(before, after));
+}
+
+TEST_CASE("a medium confidence applies the best guess and offers the alternative", "[processor][gesture]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    const auto r = p.drawGesture(bentRamp());
+    CHECK(r.decision == GestureDecision::ApplyWithAlternative);
+    REQUIRE(r.best.has_value());
+    REQUIRE(r.alternative.has_value());
+    CHECK(*p.currentPreset().rollType == r.best->type);  // applied at once
+
+    REQUIRE(p.chooseGestureAlternative());
+    CHECK(*p.currentPreset().rollType == r.alternative->type);
+    CHECK(p.currentPreset().gesture.size() >= 2);  // the drawing stays
+
+    REQUIRE(p.chooseGestureAlternative());  // the previous best is the alternative now
+    CHECK(*p.currentPreset().rollType == r.best->type);
+}
+
+TEST_CASE("without an alternative there is nothing to choose", "[processor][gesture]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    CHECK_FALSE(p.chooseGestureAlternative());  // nothing drawn yet
+    p.drawGesture({gestureLine(0.1, 0.1, 0.9, 0.9)});
+    CHECK_FALSE(p.chooseGestureAlternative());  // clear gesture: no alternative
+    p.drawGesture({gestureLine(0.0, 0.5, 1.0, 0.5)});
+    CHECK_FALSE(p.chooseGestureAlternative());  // rejected
+}
+
+TEST_CASE("a drawn gesture makes the instrument play", "[processor][gesture]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor p;
+    REQUIRE(p.loadSample(Sample::A, wavFile("tone.wav")));
+    REQUIRE(p.loadSample(Sample::B, wavFile("tone2.wav", 660.0)));
+    p.prepareToPlay(48000.0, 512);
+    CHECK(blockWithNote(p, 36) == 0.0f);  // no roll yet: silent until a gesture is drawn
+    p.prepareToPlay(48000.0, 512);
+    p.drawGesture({gestureLine(0.1, 0.1, 0.9, 0.9)});
+    CHECK(blockWithNote(p, 36) > 0.0f);
+}
+
+TEST_CASE("the gesture is saved with the preset and removed by clear", "[processor][gesture]") {
+    JuceRuntime runtime;
+    DubwirbelnProcessor a;
+    a.drawGesture({gestureLine(0.1, 0.1, 0.9, 0.9)});
+    const auto expected = a.currentPreset().gesture;
+    const auto state = stateOf(a);
+
+    DubwirbelnProcessor b;
+    b.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    CHECK(b.currentPreset().gesture.size() == expected.size());
+    CHECK(b.isDirty());  // the gesture was never saved to a file: the baseline travels with the state
+
+    b.clearRoll();
+    CHECK(b.currentPreset().gesture.empty());
+    CHECK_FALSE(b.currentPreset().rollType.has_value());
+}

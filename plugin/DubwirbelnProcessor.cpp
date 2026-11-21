@@ -405,6 +405,30 @@ bool DubwirbelnProcessor::redoVariate() {
     return true;
 }
 
+Recognition DubwirbelnProcessor::drawGesture(const Gesture& gesture) {
+    Recognition recognition = recognizeGesture(gesture);
+    lastRecognition_ = recognition;
+    if (recognition.decision == GestureDecision::Reject || !recognition.best) return recognition;
+
+    Preset preset = currentPreset();
+    preset.rollType = recognition.best->type;  // only the roll type: intensity and blend stay
+    preset.gesture = flattenForPreset(gesture);
+    applyEditedPreset(preset);
+    return recognition;
+}
+
+bool DubwirbelnProcessor::chooseGestureAlternative() {
+    if (lastRecognition_.decision != GestureDecision::ApplyWithAlternative || !lastRecognition_.best ||
+        !lastRecognition_.alternative)
+        return false;
+    std::swap(lastRecognition_.best, lastRecognition_.alternative);
+
+    Preset preset = currentPreset();
+    preset.rollType = lastRecognition_.best->type;
+    applyEditedPreset(preset);
+    return true;
+}
+
 void DubwirbelnProcessor::clearRoll() {
     Preset preset = currentPreset();
     dw::clearRoll(preset);
