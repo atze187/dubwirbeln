@@ -16,7 +16,13 @@ juce_add_plugin(Dubwirbeln
 
 target_sources(Dubwirbeln PRIVATE
     DubwirbelnProcessor.h
-    DubwirbelnProcessor.cpp)
+    DubwirbelnProcessor.cpp
+    ui/PanelLook.h
+    ui/PanelLook.cpp
+    ui/Controls.h
+    ui/Controls.cpp
+    ui/Editor.h
+    ui/Editor.cpp)
 target_include_directories(Dubwirbeln PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_definitions(Dubwirbeln PUBLIC
     JUCE_WEB_BROWSER=0

@@ -47,6 +47,13 @@ Terminology (DECIDED):
 
 Status bar provides: gesture feedback, undo/redo feedback, tooltips, MIDI learn information, system messages.
 
+UI style and first step (DECIDED, `plugin/ui`):
+- The look of all elements is taken from the user's plugin dubcycling (`PanelLook`): dark flat surfaces, 1 px edges, monospace capitals, LCD-style readouts (amber on near-black), LED-segment sliders, one blue accent. The colours are copied, so the dub* plugins look like one family. Roll types have their own colours (BUILD amber, DROP blue, RUSH orange, BURST red, WAVE aqua).
+- The editor has a header (logo, preset name with a `*` when the preset has unsaved changes, LOAD / SAVE / SAVE AS, toolbar UNDO / REDO / VARIATE / CLEAR), the roll (roll type, Intensity, Blend) and the samples (A and B with LOAD) on the left, the playback settings (mode, window, quantize, velocity follow, humanize, swing) and the trigger note with LEARN on the right, and the status bar. It is resizable from 760 x 420 and opens at 840 x 440. The Roll Painter and the Trigger Preview get their own steps; the free space on the left is meant for them.
+- Tooltips are shown in the status bar, not as popups. The status bar shows MIDI Learn ("play a note", Esc cancels) while it is on, otherwise the last message (5 seconds) such as "VARIATE  INTENSITY 78.0 %  BLEND 61.0 %", "UNDO VARIATE", "SAVED name.dwpreset" or a warning in red, otherwise the tooltip of the control under the mouse, otherwise "READY".
+- SAVE overwrites the file the preset was last loaded from or saved to (it is disabled until there is one); SAVE AS asks for a file name, adds `.dwpreset` and names the preset after the file. CLEAR asks for confirmation only when the preset is dirty.
+- The trigger note is typed as a note name (C3 = 60, so the default C1 = 36; `C#2`, `Db3`) or a number 0 to 127 and is shown as a name.
+
 ## Part 4 - Roll Painter
 
 The user draws gestures, not triggers.
