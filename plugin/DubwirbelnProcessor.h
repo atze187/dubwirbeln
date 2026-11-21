@@ -86,6 +86,12 @@ public:
     void cancelMidiLearn() { input_.cancelLearn(); }
     bool isMidiLearning() const { return input_.isLearning(); }
 
+    // For the editor: the host parameters, the name of the preset (1 to 128 characters, "Init" if empty)
+    // and the file the preset was last loaded from or saved to (empty if none).
+    juce::AudioProcessorValueTreeState& parameters() { return apvts_; }
+    void setPresetName(const juce::String& name);
+    juce::File presetFile() const;
+
     // Dirty: the preset differs from the one that was last saved or loaded (spec Part 11).
     // Clear only asks for confirmation when the preset is dirty (spec Part 10).
     bool isDirty() const;
@@ -149,6 +155,7 @@ private:
     // What "dirty" is measured against. Guarded by baselineLock_ (hosts may save the state from any thread).
     mutable juce::CriticalSection baselineLock_;
     mutable Preset baseline_;
+    mutable juce::File presetFile_;  // also guarded by baselineLock_
     void markClean();  // the current preset becomes the baseline
 
     RollScheduler scheduler_{44100.0};

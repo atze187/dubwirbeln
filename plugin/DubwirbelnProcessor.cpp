@@ -1,6 +1,7 @@
 #include "plugin/DubwirbelnProcessor.h"
 
 #include "engine/Sha256.h"
+#include "plugin/ui/Editor.h"
 
 namespace dw {
 
@@ -282,7 +283,7 @@ bool DubwirbelnProcessor::loadSample(Sample slot, const juce::File& file) {
 }
 
 juce::AudioProcessorEditor* DubwirbelnProcessor::createEditor() {
-    return new juce::GenericAudioProcessorEditor(*this);
+    return new ui::Editor(*this);
 }
 
 Preset DubwirbelnProcessor::currentPreset() const {
@@ -475,6 +476,7 @@ juce::Result DubwirbelnProcessor::savePreset(const juce::File& file) const {
     {
         const juce::ScopedLock lock(baselineLock_);
         baseline_ = archive.preset;  // saved: the preset is clean again
+        presetFile_ = file;
     }
     return juce::Result::ok();
 }
@@ -486,7 +488,24 @@ juce::Result DubwirbelnProcessor::loadPreset(const juce::File& file) {
     auto read = readPresetArchive(Bytes(begin, begin + raw.getSize()));
     if (!read.archive) return juce::Result::fail(read.error);
     installPreset(std::move(read.archive->preset), read.archive->samples);
+    {
+        const juce::ScopedLock lock(baselineLock_);
+        presetFile_ = file;
+    }
     return juce::Result::ok();
+}
+
+void DubwirbelnProcessor::setPresetName(const juce::String& name) {
+    juce::String clean = name.trim();
+    if (clean.isEmpty()) clean = "Init";
+    if (clean.length() > 128) clean = clean.substring(0, 128);
+    const juce::SpinLock::ScopedLockType lock(presetLock_);
+    storedPreset_.name = clean.toStdString();
+}
+
+juce::File DubwirbelnProcessor::presetFile() const {
+    const juce::ScopedLock lock(baselineLock_);
+    return presetFile_;
 }
 
 }  // namespace dw
